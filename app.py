@@ -646,7 +646,7 @@ with tab4:
                     count_shared = len(summary_df[summary_df["Shared_in_All"] == 1])
                     st.success(f"🤝 **核心共用 (Core Shared)**\n\n共 {count_shared} 個 ASVs")
 
-                strategy = st.radio("選擇萃取策略：", options=["🌐 保留所有特徵 (預設)", "🏷️ 僅保留極致專屬特徵", "🤝 僅保留核心共用特徵"], horizontal=True)
+                strategy = st.radio("選擇萃取策略：", options=["🌐 保留所有特徵 (預設)", "🏷️ 僅保留專屬生物標記", "🤝 僅保留核心共用特徵"], horizontal=True)
 
                 if st.button("⚡ 執行目標矩陣重構 (Reconstruct)"):
                     with st.spinner("執行局部內積重構運算中..."):
