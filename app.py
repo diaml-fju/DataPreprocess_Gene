@@ -449,19 +449,15 @@ with tab3:
 # ==========================================
 # --- 第四步：群組特徵對比與特定成分重構 ---
 # ==========================================
-import re # 用於 ASV 自然排序
-
-# ==========================================
-# --- 第四步：群組特徵對比與特定成分重構 ---
-# ==========================================
-# ==========================================
-# --- 第四步：群組特徵對比與特定成分重構 ---
-# ==========================================
-import re # 用於 ASV 自然排序
+import re
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 with tab4:
     st.header("📊 第四步：群組特徵對比、基因解析與特定成分重構")
-    st.markdown("一站式完成分析：找出群組間的「共同/獨立」成分 $\\rightarrow$ 萃取並篩選出特定分類的基因 (如 Unique ASVs) $\\rightarrow$ **直接重構出特定生物信號的目標特徵矩陣！**")
+    st.markdown("一站式完成分析：找出群組間的「共同/獨立」成分 $\rightarrow$ 萃取並篩選出特定分類的基因 $\rightarrow$ **直接重構出特定生物信號的目標特徵矩陣！**")
     
     col_w_up, col_h_up = st.columns(2)
     with col_w_up:
@@ -522,7 +518,6 @@ with tab4:
                 for k, v in class_comparison.items():
                     sorted_v = sort_comps(v)
                     comps_str = ", ".join(sorted_v) if len(v) > 0 else "無"
-                    
                     if "Shared" in k:
                         shared_comps.update(v)
                         st.success(f"🤝 **兩組共同成分 (Shared)**: {comps_str}")
@@ -575,104 +570,139 @@ with tab4:
                 default=sort_comps(selected_comps_auto)
             )
 
+            # ==========================================
+            # 3. 🚀 目標信號萃取與特徵矩陣重構
+            # ==========================================
             if final_selected_comps:
-                filtered_features_df = all_features_df[all_features_df['Component'].isin(final_selected_comps)]
-                
-# ==========================================
-                # 3. 巨觀基因交集與目標矩陣重構 (化繁為簡版)
-                # ==========================================
                 st.divider()
                 st.subheader("3. 🚀 目標信號萃取與特徵矩陣重構 (Signal Extraction & Reconstruction)")
-                st.markdown("系統已為您展開這些成分的基因交集。為了避免碎片化的組合爆炸，請直接選擇您想用於重構矩陣的 **巨觀萃取策略**：")
-                
-                with st.spinner('計算特徵交集與分類中...'):
-                    feat_col = 'Feature' if 'Feature' in filtered_features_df.columns else filtered_features_df.columns[1]
+
+               # --- 關鍵修正：計算 summary_df 並補上排序欄位 ---
+                with st.spinner('計算特徵交集與強度排序中...'):
+                    filtered_features_df = all_features_df[all_features_df['Component'].isin(final_selected_comps)]
+                    feat_col_name = 'Feature' if 'Feature' in filtered_features_df.columns else filtered_features_df.columns[1]
                     
-                    df_list = []
+                    df_list_for_summary = []
                     for comp in final_selected_comps:
                         df_comp = filtered_features_df[filtered_features_df['Component'] == comp].copy()
-                        df_list.append(df_comp)
+                        df_list_for_summary.append(df_comp)
                         
+                    # 呼叫計算函式
                     summary_df = compare_ranked_features_summary(
-                        df_list=df_list,
+                        df_list=df_list_for_summary,
                         df_names=final_selected_comps,
-                        feature_col=list(filtered_features_df.columns).index(feat_col),
+                        feature_col=list(filtered_features_df.columns).index(feat_col_name),
                         percentage_col=list(filtered_features_df.columns).index('Percentage (%)') if 'Percentage (%)' in filtered_features_df.columns else 3
                     )
                     summary_df.index.name = "ASV_Feature"
 
-                # --- 用直覺的三大策略取代複雜的多選框 ---
+                    # --- 動態計算排序欄位，避免 KeyError ---
+                    # 1. 確保 Total_Appearance 存在
+                    if 'Total_Appearance' not in summary_df.columns:
+                        summary_df['Total_Appearance'] = summary_df[final_selected_comps].sum(axis=1)
+                    
+                    # 2. 手動從所選 Component 欄位中抓取最大值作為強度排序
+                    summary_df['Max_Intensity_Score'] = summary_df[final_selected_comps].max(axis=1)
+
+                # --- 顯示詳細分佈表 ---
+                with st.expander("🔍 檢視 ASV 在各成分間的詳細分佈 (按出現頻次與強度排序)", expanded=True):
+                    display_summary = summary_df.copy()
+                    
+                    # 使用剛計算好的 Max_Intensity_Score 進行排序
+                    display_summary = display_summary.sort_values(
+                        by=['Total_Appearance', 'Max_Intensity_Score'], 
+                        ascending=[False, False]
+                    )
+                    
+                    # 準備顯示欄位 (隱藏輔助用的 Max_Intensity_Score，直接用它來排就好)
+                    show_cols = final_selected_comps + ['Total_Appearance']
+                    plot_ready_df = display_summary[show_cols]
+
+                    def style_summary_table(df):
+                        s = df.style
+                        # 針對 Component 0/1 欄位：變色標註
+                        for col in final_selected_comps:
+                            s = s.map(
+                                lambda v: 'background-color: #1f77b4; color: white; font-weight: bold;' if v > 0 else 'color: #d3d3d3;',
+                                subset=[col]
+                            )
+                        # 針對 Total_Appearance 加上淡淡的漸層感
+                        s = s.background_gradient(cmap='Blues', subset=['Total_Appearance'])
+                        return s
+
+                    st.dataframe(style_summary_table(plot_ready_df), use_container_width=True, height=400)
+                    st.caption(f"📊 排序說明：優先顯示多組共有特徵 (Shared)，並結合該特徵在各 Component 的出現權重排列。")
+
+                # --- 策略卡片與重構執行 ---
+                st.markdown("🎯 請選擇重構策略：")
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     count_all = len(summary_df)
-                    st.info(f"🌐 **保留所有特徵 (All)**\n\n共 {count_all} 個 ASVs\n\n(包含所選成分的所有 Top 特徵，資訊最完整)")
+                    st.info(f"🌐 **保留所有特徵**\n\n共 {count_all} 個 ASVs")
                 with c2:
                     count_unique = len(summary_df[summary_df["Total_Appearance"] == 1])
-                    st.warning(f"🏷️ **極致專屬 (Strictly Unique)**\n\n共 {count_unique} 個 ASVs\n\n(只保留不重疊的嚴格生物標記)")
+                    st.warning(f"🏷️ **專屬生物標記 (Exclusive)**\n\n共 {count_unique} 個 ASVs")
                 with c3:
                     count_shared = len(summary_df[summary_df["Shared_in_All"] == 1])
-                    st.success(f"🤝 **核心共用 (Core Shared)**\n\n共 {count_shared} 個 ASVs\n\n(只保留所有成分都有的核心基因)")
+                    st.success(f"🤝 **核心共用 (Core Shared)**\n\n共 {count_shared} 個 ASVs")
 
-                strategy = st.radio(
-                    "🎯 請選擇特徵萃取策略以進行矩陣重構：",
-                    options=["🌐 保留所有特徵 (預設)", "🏷️ 僅保留極致專屬特徵", "🤝 僅保留核心共用特徵"],
-                    horizontal=True
-                )
+                strategy = st.radio("選擇萃取策略：", options=["🌐 保留所有特徵 (預設)", "🏷️ 僅保留極致專屬特徵", "🤝 僅保留核心共用特徵"], horizontal=True)
 
                 if st.button("⚡ 執行目標矩陣重構 (Reconstruct)"):
                     with st.spinner("執行局部內積重構運算中..."):
-                        
-                        # 1. 根據策略過濾 ASV
                         if "極致專屬" in strategy:
                             final_asv_summary = summary_df[summary_df["Total_Appearance"] == 1]
                         elif "核心共用" in strategy:
                             final_asv_summary = summary_df[summary_df["Shared_in_All"] == 1]
                         else:
-                            final_asv_summary = summary_df # 全要
+                            final_asv_summary = summary_df
                             
-                        # 若該策略下沒有半個基因，直接擋下
                         if len(final_asv_summary) == 0:
-                            st.error(f"⚠️ 在「{strategy}」策略下，找不到任何符合的 ASV。請嘗試切換其他策略。")
+                            st.error(f"⚠️ 在此策略下找不到符合的 ASV。")
                         else:
-                            # 2. 抓取過濾後的 ASV 清單並進行自然排序
                             target_asvs = final_asv_summary.index.tolist()
                             def natural_sort_key(s):
                                 return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(s))]
                             
                             valid_asvs = sorted([asv for asv in target_asvs if asv in H_matrix.columns], key=natural_sort_key)
-                            
-                            # 3. 準備 W_sub 與 H_sub
                             valid_w_comps = [c for c in final_selected_comps if c in df_w.columns]
+                            
                             W_sub = df_w[valid_w_comps].values
                             H_sub = H_matrix.loc[valid_w_comps, valid_asvs].values
-                            
-                            # 4. 內積重構 (np.dot)
                             V_reconstructed = np.dot(W_sub, H_sub)
                             
-                            # 5. 建立 DataFrame，並將 Y 標籤放回最前面
                             df_final = pd.DataFrame(V_reconstructed, columns=valid_asvs)
-                            df_final.insert(0, class_col_target, df_w[class_col_target])
-                            df_final.index = df_w.index # 維持病患原始順序
+                            df_final.insert(0, class_col_target, df_w[class_col_target].values)
+                            df_final.index = df_w.index
                             
                             st.session_state.reconstructed_df = df_final
                             st.session_state.current_strategy = strategy
-                            st.success(f"✅ 目標矩陣重構成功！(使用策略：{strategy})")
-                
-                # 若 session_state 裡有重構好的資料，就顯示出來
+                            st.success(f"✅ 重構成功！")
+
+                # --- 重構後的資料與熱圖視覺化 ---
                 if 'reconstructed_df' in st.session_state:
                     recon_df = st.session_state.reconstructed_df
                     strat = st.session_state.get('current_strategy', '')
                     
-                    st.write(f"**重構後的目標特徵表：** `形狀 {recon_df.shape}`")
-                    st.dataframe(recon_df.head(15), use_container_width=True)
+                    st.divider()
+                    st.subheader("🔍 重構結果分析")
                     
-                    st.download_button(
-                        label="📥 下載特定成分重構矩陣 (Reconstructed_Target_Matrix.csv)",
-                        data=recon_df.to_csv(index=True).encode('utf-8'),
-                        file_name="Reconstructed_Target_Matrix.csv",
-                        mime="text/csv",
-                        help="這份資料已經精準萃取出最重要的生物標記信號，可直接作為後續進階分析的高品質輸入資料。"
-                    )
+                    # 建立分頁
+                    view_tab1, view_tab2 = st.tabs(["📈 特徵分佈視覺化", "📋 原始數據預覽"])
 
+                    with view_tab1:
+                        st.markdown("**各組別在重構特徵上的平均表現 (Heatmap)**")
+                        group_mean = recon_df.groupby(class_col_target).mean()
+                        plot_data = group_mean.iloc[:, :30] if group_mean.shape[1] > 30 else group_mean
+                        
+                        fig_heat, ax_heat = plt.subplots(figsize=(12, 5))
+                        sns.heatmap(plot_data, cmap="YlGnBu", ax=ax_heat)
+                        ax_heat.set_title(f"Feature Heatmap ({strat})")
+                        st.pyplot(fig_heat)
+
+                    with view_tab2:
+                        st.dataframe(recon_df.head(15).style.background_gradient(subset=recon_df.columns[1:], cmap='BuPu'), use_container_width=True)
+                    
+                    st.download_button(label="📥 下載重構矩陣 (CSV)", data=recon_df.to_csv(index=True).encode('utf-8'), file_name="Reconstructed_Matrix.csv", mime="text/csv")
             else:
-                st.warning("⚠️ 此篩選條件下目前沒有成分。請選擇至少一個成分。")
+                st.warning("⚠️ 請選擇至少一個成分。")
