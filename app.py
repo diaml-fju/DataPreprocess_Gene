@@ -690,7 +690,7 @@ with tab4:
                     
                     st.dataframe(recon_df.head(15).style.background_gradient(subset=recon_df.columns[1:], cmap='BuPu'), use_container_width=True)
                     
-                    csv_data = recon_df.to_csv(index=True).encode('utf-8-sig')
+                    csv_data = recon_df.to_csv(index=False).encode('utf-8-sig')
                     st.download_button(
                         label="📥 下載完整重構矩陣 (CSV)", 
                         data=csv_data, 
