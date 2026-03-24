@@ -457,7 +457,7 @@ import matplotlib.pyplot as plt
 
 with tab4:
     st.header("📊 第四步：群組特徵對比、基因解析與特定成分重構")
-    st.markdown("一站式完成分析：找出群組間的「共同/獨立」成分 $\rightarrow$ 萃取並篩選出特定分類的基因 $\rightarrow$ **直接重構出特定生物信號的目標特徵矩陣！**")
+    st.markdown("一站式完成分析：找出群組間的「共同/獨立」成分 $\\rightarrow$ 萃取並篩選出特定分類的基因 $\\rightarrow$ **直接重構出特定生物信號的目標特徵矩陣！**")
     
     col_w_up, col_h_up = st.columns(2)
     with col_w_up:
@@ -577,7 +577,6 @@ with tab4:
                 st.divider()
                 st.subheader("3. 🚀 目標信號萃取與特徵矩陣重構 (Signal Extraction & Reconstruction)")
 
-               # --- 關鍵修正：計算 summary_df 並補上排序欄位 ---
                 with st.spinner('計算特徵交集與強度排序中...'):
                     filtered_features_df = all_features_df[all_features_df['Component'].isin(final_selected_comps)]
                     feat_col_name = 'Feature' if 'Feature' in filtered_features_df.columns else filtered_features_df.columns[1]
@@ -587,7 +586,6 @@ with tab4:
                         df_comp = filtered_features_df[filtered_features_df['Component'] == comp].copy()
                         df_list_for_summary.append(df_comp)
                         
-                    # 呼叫計算函式
                     summary_df = compare_ranked_features_summary(
                         df_list=df_list_for_summary,
                         df_names=final_selected_comps,
@@ -596,42 +594,45 @@ with tab4:
                     )
                     summary_df.index.name = "ASV_Feature"
 
-                    # --- 動態計算排序欄位，避免 KeyError ---
-                    # 1. 確保 Total_Appearance 存在
                     if 'Total_Appearance' not in summary_df.columns:
                         summary_df['Total_Appearance'] = summary_df[final_selected_comps].sum(axis=1)
                     
-                    # 2. 手動從所選 Component 欄位中抓取最大值作為強度排序
                     summary_df['Max_Intensity_Score'] = summary_df[final_selected_comps].max(axis=1)
 
-                # --- 顯示詳細分佈表 ---
                 with st.expander("🔍 檢視 ASV 在各成分間的詳細分佈 (按出現頻次與強度排序)", expanded=True):
                     display_summary = summary_df.copy()
-                    
-                    # 使用剛計算好的 Max_Intensity_Score 進行排序
                     display_summary = display_summary.sort_values(
                         by=['Total_Appearance', 'Max_Intensity_Score'], 
                         ascending=[False, False]
                     )
                     
-                    # 準備顯示欄位 (隱藏輔助用的 Max_Intensity_Score，直接用它來排就好)
                     show_cols = final_selected_comps + ['Total_Appearance']
                     plot_ready_df = display_summary[show_cols]
 
                     def style_summary_table(df):
                         s = df.style
-                        # 針對 Component 0/1 欄位：變色標註
                         for col in final_selected_comps:
                             s = s.map(
                                 lambda v: 'background-color: #1f77b4; color: white; font-weight: bold;' if v > 0 else 'color: #d3d3d3;',
                                 subset=[col]
                             )
-                        # 針對 Total_Appearance 加上淡淡的漸層感
                         s = s.background_gradient(cmap='Blues', subset=['Total_Appearance'])
                         return s
 
                     st.dataframe(style_summary_table(plot_ready_df), use_container_width=True, height=400)
                     st.caption(f"📊 排序說明：優先顯示多組共有特徵 (Shared)，並結合該特徵在各 Component 的出現權重排列。")
+
+                    # ===== 新增：下載 display_summary 的功能 =====
+                    # 確保包含 index (ASV_Feature 名稱) 並使用 utf-8-sig 避免 Excel 亂碼
+                    csv_summary = display_summary.to_csv(index=True).encode('utf-8-sig')
+                    st.download_button(
+                        label="📥 下載詳細分佈表 (CSV)",
+                        data=csv_summary,
+                        file_name="ASV_Feature_Summary.csv",
+                        mime="text/csv",
+                        key="download_summary_btn"  # 加上 key 避免與其他下載按鈕衝突
+                    )
+                    # ============================================
 
                 # --- 策略卡片與重構執行 ---
                 st.markdown("🎯 請選擇重構策略：")
@@ -643,17 +644,17 @@ with tab4:
                     count_unique = len(summary_df[summary_df["Total_Appearance"] == 1])
                     st.warning(f"🏷️ **專屬生物標記 (Exclusive)**\n\n共 {count_unique} 個 ASVs")
                 with c3:
-                    count_shared = len(summary_df[summary_df["Shared_in_All"] == 1])
+                    count_shared = len(summary_df[summary_df.get("Shared_in_All", summary_df["Total_Appearance"] == len(final_selected_comps)) == 1])
                     st.success(f"🤝 **核心共用 (Core Shared)**\n\n共 {count_shared} 個 ASVs")
 
-                strategy = st.radio("選擇萃取策略：", options=["🌐 保留所有特徵 (預設)", "🏷️ 僅保留專屬生物標記", "🤝 僅保留核心共用特徵"], horizontal=True)
+                strategy = st.radio("選擇萃取策略：", options=["🌐 保留所有特徵 (預設)", "🏷️ 僅保留極致專屬特徵", "🤝 僅保留核心共用特徵"], horizontal=True)
 
                 if st.button("⚡ 執行目標矩陣重構 (Reconstruct)"):
                     with st.spinner("執行局部內積重構運算中..."):
                         if "極致專屬" in strategy:
                             final_asv_summary = summary_df[summary_df["Total_Appearance"] == 1]
                         elif "核心共用" in strategy:
-                            final_asv_summary = summary_df[summary_df["Shared_in_All"] == 1]
+                            final_asv_summary = summary_df[summary_df.get("Shared_in_All", summary_df["Total_Appearance"] == len(final_selected_comps)) == 1]
                         else:
                             final_asv_summary = summary_df
                             
@@ -677,32 +678,24 @@ with tab4:
                             
                             st.session_state.reconstructed_df = df_final
                             st.session_state.current_strategy = strategy
-                            st.success(f"✅ 重構成功！")
+                            st.success(f"✅ 重構成功！已產生 {len(valid_asvs)} 個特徵的矩陣。")
 
-                # --- 重構後的資料與熱圖視覺化 ---
+                # --- 顯示重構後的數據預覽與下載 ---
                 if 'reconstructed_df' in st.session_state:
                     recon_df = st.session_state.reconstructed_df
                     strat = st.session_state.get('current_strategy', '')
                     
                     st.divider()
-                    st.subheader("🔍 重構結果分析")
+                    st.subheader(f"📋 原始數據預覽與下載 ({strat})")
                     
-                    # 建立分頁
-                    view_tab1, view_tab2 = st.tabs(["📈 特徵分佈視覺化", "📋 原始數據預覽"])
-
-                    with view_tab1:
-                        st.markdown("**各組別在重構特徵上的平均表現 (Heatmap)**")
-                        group_mean = recon_df.groupby(class_col_target).mean()
-                        plot_data = group_mean.iloc[:, :30] if group_mean.shape[1] > 30 else group_mean
-                        
-                        fig_heat, ax_heat = plt.subplots(figsize=(12, 5))
-                        sns.heatmap(plot_data, cmap="YlGnBu", ax=ax_heat)
-                        ax_heat.set_title(f"Feature Heatmap ({strat})")
-                        st.pyplot(fig_heat)
-
-                    with view_tab2:
-                        st.dataframe(recon_df.head(15).style.background_gradient(subset=recon_df.columns[1:], cmap='BuPu'), use_container_width=True)
+                    st.dataframe(recon_df.head(15).style.background_gradient(subset=recon_df.columns[1:], cmap='BuPu'), use_container_width=True)
                     
-                    st.download_button(label="📥 下載重構矩陣 (CSV)", data=recon_df.to_csv(index=True).encode('utf-8'), file_name="Reconstructed_Matrix.csv", mime="text/csv")
+                    csv_data = recon_df.to_csv(index=True).encode('utf-8-sig')
+                    st.download_button(
+                        label="📥 下載完整重構矩陣 (CSV)", 
+                        data=csv_data, 
+                        file_name="NMF_Reconstructed_Matrix.csv", 
+                        mime="text/csv"
+                    )
             else:
                 st.warning("⚠️ 請選擇至少一個成分。")
