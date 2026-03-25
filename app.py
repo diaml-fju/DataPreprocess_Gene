@@ -798,7 +798,7 @@ with tab5:
                 
                 # 模型與參數設定
                 all_models_setup = {
-                    "XGBoost": (xgb.XGBClassifier(missing=np.nan, random_state=4), 
+                    "XGBoost": (xgb.XGBClassifier(missing=np.nan, random_state=4,tree_method='hist'), 
                                 {'max_depth': [4, 5, 6], 'gamma': [0, 0.25, 1.0], 'scale_pos_weight': [1, 3, 5]}),
                     "Random Forest": (RandomForestClassifier(random_state=4), 
                                       {'max_depth': [None, 5, 10], 'n_estimators': [50, 100]}),
