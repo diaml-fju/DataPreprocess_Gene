@@ -663,7 +663,8 @@ with tab4:
 
                 if st.button("⚡ 執行目標矩陣重構 (Reconstruct)"):
                     with st.spinner("執行局部內積重構運算中..."):
-                        if "極致專屬" in strategy:
+                        # 💡 修正 1：確保判斷字眼與 Radio 選項一致
+                        if "專屬生物" in strategy:
                             final_asv_summary = summary_df[summary_df["Total_Appearance"] == 1]
                         elif "核心共用" in strategy:
                             final_asv_summary = summary_df[summary_df.get("Shared_in_All", summary_df["Total_Appearance"] == len(final_selected_comps)) == 1]
@@ -703,9 +704,10 @@ with tab4:
                     st.dataframe(recon_df.head(15).style.background_gradient(subset=recon_df.columns[1:], cmap='BuPu'), use_container_width=True)
                     
                     # 1. 解析策略名稱，轉換為適合檔名的文字
+                    # 💡 修正 2：確保檔名生成邏輯也能抓到正確的字眼
                     if "所有特徵" in strat:
                         strat_name = "All"
-                    elif "極致專屬" in strat:
+                    elif "專屬生物" in strat:
                         strat_name = "Exclusive"
                     elif "核心共用" in strat:
                         strat_name = "CoreShared"
