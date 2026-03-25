@@ -821,7 +821,7 @@ with tab5:
                             # 💡 這裡的 n_jobs 已經幫你設定為 1，避免 Windows 報錯
                             gridS_model = GridSearchCV(
                                 estimator=clf,
-                                param_grid=param_grid,
+                                #param_grid=param_grid,
                                 scoring='accuracy',
                                 n_jobs=1,
                                 cv=cross_val, 
