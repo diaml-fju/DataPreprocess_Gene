@@ -784,14 +784,16 @@ with tab5:
                 # Random Forest
                 clf_rf = RandomForestClassifier(random_state=4)
                 param_grid_rf = {
-                    'max_depth': [None, 5, 10],
-                    'n_estimators': [50, 100]
+                    'max_depth': list(range(5, 8)) + [None],
+                    'max_features':['auto', 'sqrt', 'log2'],
+                    'n_estimators':[100,150,200]
                 }
                 
                 # Lasso (L1 Logistic Regression)
-                clf_lasso = LogisticRegression(penalty='l1', solver='liblinear', random_state=4)
+                clf_lasso = LogisticRegression(penalty='l1',random_state=4,max_iter=10000)
                 param_grid_lasso = {
-                    'C': [0.1, 1.0, 10.0]
+                    'solver':['liblinear'],
+                    'C': np.power(10., np.arange(-4, 4))
                 }
 
                 models_setup = {
