@@ -5,6 +5,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import os
 from sklearn.decomposition import NMF
+import pandas as pd
+import xgboost as xgb
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import LeaveOneOut, GridSearchCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_curve, confusion_matrix, roc_auc_score
 
 # 設定頁面佈局
 st.set_page_config(page_title="基因數據分析儀表板", layout="wide")
@@ -735,3 +742,208 @@ with tab4:
                     )
             else:
                 st.warning("⚠️ 請從步驟 2 選擇至少一個成分以繼續。")
+
+with tab5:
+    st.header("🤖 第五步：機器學習模型訓練與驗證 (LOOCV)")
+    st.markdown("上傳您的特徵重構矩陣，系統將自動進行特徵縮放，並使用 Leave-One-Out 與 GridSearch 訓練 **XGBoost**、**Random Forest** 與 **Lasso** 三種模型。")
+
+    # --- 1. 檔案上傳與資料準備 ---
+    file_model_data = st.file_uploader("📂 上傳重構後的特徵資料 (CSV，需包含 Y 標籤)", type=["csv"], key="model_data_up")
+
+    if file_model_data:
+        df = pd.read_csv(file_model_data)
+        
+        # 讓使用者選擇 Y 標籤欄位 (預設尋找 'Y' 或第一個欄位)
+        default_y = 'Y' if 'Y' in df.columns else df.columns[0]
+        y_col = st.selectbox("請確認您的目標變數 (Y) 欄位：", df.columns, index=list(df.columns).index(default_y))
+        
+        st.write("📊 預覽上傳資料：")
+        st.dataframe(df.head(), use_container_width=True)
+
+        if st.button("🚀 開始訓練所有模型 (這可能需要幾分鐘時間)"):
+            with st.spinner("資料前處理與模型訓練中，請耐心等候..."):
+                
+                # --- 2. 資料前處理 ---
+                X_raw = df.drop(y_col, axis=1).copy()
+                Y_raw = df[y_col].copy().values
+                
+                # MinMax Scaling
+                MMscaler = MinMaxScaler(feature_range=(0, 1))
+                X_normalized = MMscaler.fit_transform(X_raw)
+                X_df = pd.DataFrame(data=X_normalized, columns=X_raw.columns)
+                
+                # --- 3. 初始化模型與參數網格 (Parameter Grids) ---
+                # XGBoost
+                clf_xgb = xgb.XGBClassifier(missing=np.nan, random_state=4)
+                param_grid_xgb = {
+                    'max_depth': [4, 5, 6],
+                    'gamma': [0, 0.25, 1.0],
+                    'scale_pos_weight': [1, 3, 5]
+                }
+                
+                # Random Forest
+                clf_rf = RandomForestClassifier(random_state=4)
+                param_grid_rf = {
+                    'max_depth': [None, 5, 10],
+                    'n_estimators': [50, 100]
+                }
+                
+                # Lasso (L1 Logistic Regression)
+                clf_lasso = LogisticRegression(penalty='l1', solver='liblinear', random_state=4)
+                param_grid_lasso = {
+                    'C': [0.1, 1.0, 10.0]
+                }
+
+                models_setup = {
+                    "XGBoost": (clf_xgb, param_grid_xgb),
+                    "Random Forest": (clf_rf, param_grid_rf),
+                    "Lasso (L1 Logistic)": (clf_lasso, param_grid_lasso)
+                }
+
+                cross_val = LeaveOneOut()
+                
+                # 用來儲存所有模型的結果
+                all_model_results = {}
+
+                # 建立進度條
+                progress_bar = st.progress(0)
+                total_models = len(models_setup)
+                
+                # --- 4. 執行模型訓練與 LOOCV ---
+                for m_idx, (model_name, (clf, param_grid)) in enumerate(models_setup.items()):
+                    st.toast(f"正在訓練 {model_name}...")
+                    
+                    each_round_y_probability = []
+                    each_round_y_prediction = []
+                    
+                    # LOOCV 迴圈
+                    for i in range(len(X_df)):
+                        # 準備訓練與測試集
+                        X_train = X_df.drop(i, axis=0)
+                        Y_train = np.delete(Y_raw, i)
+                        X_test = X_df.iloc[[i]]
+                        Y_test = Y_raw[i]
+                        
+                        # GridSearchCV (內層)
+                        gridS_model = GridSearchCV(
+                            estimator=clf,
+                            param_grid=param_grid,
+                            scoring='accuracy',
+                            n_jobs=-1,
+                            cv=cross_val, # 如果樣本太少，內層的 LOO 可能會很久，這裡維持你的設定
+                            verbose=0,
+                            refit=True
+                        )
+                        
+                        gridS_model.fit(X_train, Y_train) 
+                        train_model = gridS_model.best_estimator_
+                        
+                        # 預測機率與結果
+                        # 確保抓取到的是單一數值
+                        y_prob_pred = train_model.predict_proba(X_test)[0, 1] 
+                        prediction = train_model.predict(X_test)[0]
+                        
+                        each_round_y_probability.append(y_prob_pred)
+                        each_round_y_prediction.append(prediction)
+                        
+                        # 更新整體進度條 (計算總共要跑多少個 iteration)
+                        current_step = m_idx * len(X_df) + (i + 1)
+                        total_steps = len(X_df) * total_models
+                        progress_bar.progress(current_step / total_steps)
+
+                    # --- 5. 計算 Youden's J score 與各項指標 ---
+                    fpr, tpr, thresholds = roc_curve(Y_raw, each_round_y_probability, pos_label=1)
+                    J_score = tpr - fpr
+                    best_JTH_cutpoint_index = np.argmax(J_score)
+                    best_JS_threshold = thresholds[best_JTH_cutpoint_index]
+                    
+                    # 重新根據最佳閾值判定結果
+                    final_prediction = (np.array(each_round_y_probability) >= best_JS_threshold).astype('int')
+                    confusion = confusion_matrix(Y_raw, final_prediction)
+                    
+                    # 處理防呆 (避免除以零)
+                    TP = confusion[1, 1] if confusion.shape == (2, 2) else 0
+                    TN = confusion[0, 0] if confusion.shape == (2, 2) else 0
+                    FP = confusion[0, 1] if confusion.shape == (2, 2) else 0
+                    FN = confusion[1, 0] if confusion.shape == (2, 2) else 0
+                    
+                    accuracy = (TP + TN) / (TP + TN + FP + FN) if (TP + TN + FP + FN) > 0 else 0
+                    precision = TP / (TP + FP) if (TP + FP) > 0 else 0
+                    sensitivity = TP / (TP + FN) if (TP + FN) > 0 else 0
+                    specificity = TN / (FP + TN) if (FP + TN) > 0 else 0
+                    f1score = 2 * (precision * sensitivity) / (precision + sensitivity) if (precision + sensitivity) > 0 else 0
+                    
+                    try:
+                        auc_value = roc_auc_score(Y_raw, each_round_y_probability)
+                    except ValueError:
+                        auc_value = 0 # 處理只有一個類別報錯的情況
+                    
+                    # 整理結果表格
+                    result_df = pd.DataFrame({
+                        'y_true': Y_raw,
+                        'y_pred_original': each_round_y_prediction,
+                        'y_prob': each_round_y_probability,
+                        'y_pred_adjusted': final_prediction
+                    })
+                    
+                    # 儲存到字典
+                    all_model_results[model_name] = {
+                        "metrics": {
+                            "Accuracy": round(accuracy * 100, 2),
+                            "Precision": round(precision * 100, 2),
+                            "F1 score": round(f1score * 100, 2),
+                            "Sensitivity": round(sensitivity * 100, 2),
+                            "Specificity": round(specificity * 100, 2),
+                            "AUC": round(auc_value * 100, 2),
+                            "Threshold": round(best_JS_threshold, 4)
+                        },
+                        "confusion": confusion,
+                        "predictions": result_df
+                    }
+
+                progress_bar.empty() # 跑完清除進度條
+                st.success("✅ 所有模型訓練與評估完成！")
+                
+                # --- 6. 呈現結果 (使用 Tabs 切換不同模型) ---
+                tabs = st.tabs(list(models_setup.keys()))
+                
+                for idx, tab in enumerate(tabs):
+                    model_name = list(models_setup.keys())[idx]
+                    res = all_model_results[model_name]
+                    
+                    with tab:
+                        st.subheader(f"📈 {model_name} 結果報表")
+                        
+                        # 顯示指標 (使用列排版)
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("Accuracy", f"{res['metrics']['Accuracy']}%")
+                        m2.metric("AUC", f"{res['metrics']['AUC']}%")
+                        m3.metric("F1 Score", f"{res['metrics']['F1 score']}%")
+                        m4.metric("最佳 Threshold (J-score)", f"{res['metrics']['Threshold']}")
+                        
+                        m5, m6, m7, m8 = st.columns(4)
+                        m5.metric("Sensitivity (TPR)", f"{res['metrics']['Sensitivity']}%")
+                        m6.metric("Specificity (TNR)", f"{res['metrics']['Specificity']}%")
+                        m7.metric("Precision", f"{res['metrics']['Precision']}%")
+                        
+                        st.divider()
+                        col_conf, col_pred = st.columns([1, 2])
+                        
+                        with col_conf:
+                            st.markdown("**混淆矩陣 (Confusion Matrix)**")
+                            st.dataframe(pd.DataFrame(res['confusion'], columns=["Pred 0", "Pred 1"], index=["True 0", "True 1"]), use_container_width=True)
+                            
+                        with col_pred:
+                            st.markdown("**Leave-One-Out 預測明細**")
+                            # 將原本的 PrettyTable 轉為 Streamlit DataFrame
+                            st.dataframe(res['predictions'], use_container_width=True, height=200)
+                            
+                        # 下載預測結果
+                        csv = res['predictions'].to_csv(index=False).encode('utf-8-sig')
+                        st.download_button(
+                            label=f"📥 下載 {model_name} 預測明細 (CSV)",
+                            data=csv,
+                            file_name=f"{model_name}_LOOCV_Results.csv",
+                            mime="text/csv",
+                            key=f"download_{model_name}"
+                        )
