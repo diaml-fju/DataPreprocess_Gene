@@ -763,14 +763,21 @@ with tab5:
         st.divider()
         st.subheader("⚙️ 模型設定")
         
-        available_models = ["XGBoost", "Random Forest", "Lasso (L1 Logistic)"]
-        selected_models = st.multiselect(
+        # 💡 調整 1：改變選單順序，由快到慢
+        available_models = ["Lasso (L1 Logistic)", "Random Forest", "XGBoost"]
+        user_selected_models = st.multiselect(
             "請選擇要訓練的模型 (可多選)：", 
             options=available_models, 
             default=available_models
         )
+        
+        # 💡 隱藏的巧思：強制將使用者選擇的模型，依照我們設定的「最快到最慢」排序
+        selected_models = [m for m in available_models if m in user_selected_models]
 
-        # 預先開好外層的 Tabs，讓訓練過程可以直接把結果「塞」進去
+        # 💡 調整 2：把執行按鈕移到這裡 (模型選擇的正下方)
+        start_training_btn = st.button("🚀 開始嚴謹訓練 (包含 GridSearch，這需要一些時間)")
+
+        # 預先開好外層的 Tabs，排在按鈕的下方，讓結果可以塞進去
         if selected_models:
             tab_names = ["🏆 綜合比較"] + selected_models
             tabs = st.tabs(tab_names)
@@ -780,7 +787,8 @@ with tab5:
         # ==========================================
         # --- 模型訓練區塊 ---
         # ==========================================
-        if st.button("🚀 開始嚴謹訓練 (包含 GridSearch，這需要一些時間)"):
+        # 使用剛剛定義好的按鈕變數來判斷
+        if start_training_btn:
             if not selected_models:
                 st.warning("⚠️ 請至少選擇一個模型來進行訓練！")
             else:
@@ -796,23 +804,24 @@ with tab5:
                 X_normalized = MMscaler.fit_transform(X_raw)
                 X_df = pd.DataFrame(data=X_normalized, columns=X_raw.columns)
                 
-                # 模型與參數設定
+                # 模型與參數設定 (💡 順序也調整為 Lasso -> RF -> XGBoost)
                 all_models_setup = {
-                    "XGBoost": (xgb.XGBClassifier(missing=np.nan, random_state=4,tree_method='hist'), 
-                                {'max_depth': [4, 5, 6], 'gamma': [0, 0.25, 1.0], 'scale_pos_weight': [1, 3, 5]}),
+                    "Lasso (L1 Logistic)": (LogisticRegression(penalty='l1', solver='liblinear', random_state=4), 
+                                            {'C': [0.1, 1.0, 10.0]}),
                     "Random Forest": (RandomForestClassifier(random_state=4), 
                                       {'max_depth': [None, 5, 10], 'n_estimators': [50, 100]}),
-                    "Lasso (L1 Logistic)": (LogisticRegression(penalty='l1', solver='liblinear', random_state=4), 
-                                            {'C': [0.1, 1.0, 10.0]})
+                    "XGBoost": (xgb.XGBClassifier(missing=np.nan, random_state=4, tree_method='hist'), 
+                                {'max_depth': [4, 5, 6], 'gamma': [0, 0.25, 1.0], 'scale_pos_weight': [1, 3, 5]})
                 }
                 
-                models_setup = {k: v for k, v in all_models_setup.items() if k in selected_models}
+                # 根據剛剛排序好的 selected_models 來抽取設定，確保執行順序正確
+                models_setup = {k: all_models_setup[k] for k in selected_models}
                 cross_val = LeaveOneOut()
                 
                 progress_bar = st.progress(0)
                 total_models = len(models_setup)
                 
-                # 💡 開始迴圈訓練 (做完一個印一個)
+                # 開始迴圈訓練 (做完一個印一個)
                 for m_idx, (model_name, (clf, param_grid)) in enumerate(models_setup.items()):
                     with st.spinner(f"正在執行 {model_name} 的 LOOCV 與 GridSearch..."):
                         
@@ -895,8 +904,7 @@ with tab5:
                             "predictions": result_df
                         }
 
-                        # 💡 核心優化：做完一個模型，立刻把數據畫在它對應的 Tab 裡！
-                        # (m_idx + 1 是因為 tabs[0] 是留給綜合比較的)
+                        # 做完一個模型，立刻把數據畫在它對應的 Tab 裡！
                         with tabs[m_idx + 1]:
                             st.success(f"✅ {model_name} 運算完成！下方為即時結果：")
                             res = st.session_state['trained_results'][model_name]
@@ -912,7 +920,6 @@ with tab5:
                 # 所有迴圈結束
                 progress_bar.empty()
                 st.toast("🎉 所有模型都跑完囉！")
-                # 重新整理畫面，讓系統將完整的按鈕與圖表渲染出來 (避免按鈕被刷新吃掉)
                 st.rerun()
 
         # ==========================================
@@ -962,7 +969,6 @@ with tab5:
 
             # --- 後續 Tabs: 各別模型詳細資料與下載按鈕 ---
             for idx, model_name in enumerate(saved_keys):
-                # 確保這個模型真的有成功存入記憶中
                 if model_name in saved_results:
                     res = saved_results[model_name]
                     
