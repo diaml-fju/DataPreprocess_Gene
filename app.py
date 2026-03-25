@@ -455,6 +455,13 @@ import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+import re
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+import streamlit as st # 確保 st 有被引入
+
 with tab4:
     st.header("📊 第四步：群組特徵對比、基因解析與特定成分重構")
     st.markdown("一站式完成分析：找出群組間的「共同/獨立」成分 $\\rightarrow$ 萃取並篩選出特定分類的基因 $\\rightarrow$ **直接重構出特定生物信號的目標特徵矩陣！**")
@@ -489,19 +496,22 @@ with tab4:
                 topk_per_sample, topk_counts, class_comparison = topk_components_class_comparison(df_w, class_col=class_col_target, top_k=top_k_val)
                 df_topk_counts = topk_counts.fillna(0).astype(int)
             
-            # --- A. 氣泡圖 ---
-            st.markdown(f"**A. 特徵分佈氣泡圖 (圓圈大小代表成分的重要程度)**")
+            # --- A. 長條圖 (Bar Chart) 取代原有的氣泡圖 ---
+            st.markdown(f"**A. 特徵分佈長條圖 (不同群組在各成分的分佈數量)**")
             df_melted = df_topk_counts.reset_index().melt(id_vars=class_col_target, var_name="Component", value_name="Count")
-            df_bubble = df_melted[df_melted["Count"] > 0]
             
-            fig_bubble, ax_bubble = plt.subplots(figsize=(10, 4))
-            sns.scatterplot(data=df_bubble, x="Component", y=class_col_target, size="Count", sizes=(50, 1000), hue=class_col_target, palette="Set1", alpha=0.7, ax=ax_bubble, legend=False)
-            ax_bubble.set_title(f"Component Distribution by {class_col_target} (Top-{top_k_val} per sample)")
-            ax_bubble.set_xlabel("NMF Component")
-            ax_bubble.set_ylabel(class_col_target)
-            ax_bubble.margins(y=0.3)
-            plt.grid(True, linestyle='--', alpha=0.3)
-            st.pyplot(fig_bubble)
+            # 為了讓圖表 X 軸排序更美觀，我們抓取 Component 的數字進行排序
+            df_melted['Comp_Num'] = df_melted['Component'].apply(lambda x: int(str(x).replace('C', '')) if str(x).startswith('C') and str(x).replace('C', '').isdigit() else 999)
+            df_melted = df_melted.sort_values(['Comp_Num', 'Component'])
+
+            fig_bar, ax_bar = plt.subplots(figsize=(10, 4))
+            # 使用 sns.barplot 繪製分組長條圖
+            sns.barplot(data=df_melted, x="Component", y="Count", hue=class_col_target, palette="Set1", ax=ax_bar)
+            ax_bar.set_title(f"Component Counts by {class_col_target} (Top-{top_k_val} per sample)")
+            ax_bar.set_xlabel("NMF Component")
+            ax_bar.set_ylabel("Count")
+            plt.grid(True, axis='y', linestyle='--', alpha=0.5) # 只留橫向格線讓畫面更清爽
+            st.pyplot(fig_bar)
 
             # --- 排序小幫手 ---
             def sort_comps(comps):
@@ -533,18 +543,12 @@ with tab4:
                     all_present_comps.update(comps)
 
             # ==========================================
-            # 2. H 矩陣解析 (微觀萃取)
+            # 2. H 矩陣解析 (選擇成分)
             # ==========================================
             st.divider()
-            st.subheader("2. H 矩陣解析：選擇要提取的成分庫")
+            st.subheader("2. H 矩陣解析：選擇目標成分")
+            st.markdown("💡 **操作說明**：請根據上方的分析結果，挑選出您感興趣的特定成分（例如：只選取兩組共用的成分，或某組獨有的成分）。這些被選中的成分將作為下一步基因萃取的基礎庫。")
             
-            top_n_val = st.number_input("每個成分要保留前 N 個基因特徵 (輸入 0 匯出全部):", min_value=0, max_value=len(H_matrix.columns), value=15, step=1)
-            use_top_n = top_n_val if top_n_val > 0 else None
-            
-            with st.spinner('解析 H 矩陣特徵中...'):
-                sorted_features_dict = extract_sorted_features_from_H(H_matrix, top_n=use_top_n)
-                all_features_df = pd.concat(sorted_features_dict, names=['Component', 'DropIndex']).reset_index(level='DropIndex', drop=True).reset_index()
-
             classes = df_w[class_col_target].unique().tolist()
             radio_options = ["🤝 共同成分 (Shared)", "🏷️ 所有獨立成分 (All Unique)"]
             if len(classes) >= 2:
@@ -565,7 +569,7 @@ with tab4:
                     selected_comps_auto = next((val for key, val in class_comparison.items() if "Unique" in key and str(c1) in key), set())
 
             final_selected_comps = st.multiselect(
-                "✨ 系統已自動帶入成分，請確認 (這些成分將進入下一步進行交集比對)：",
+                "✨ 系統已自動帶入成分，請確認或手動調整 (這些成分將進入下一步進行萃取)：",
                 options=sort_comps(H_matrix.index.tolist()), 
                 default=sort_comps(selected_comps_auto)
             )
@@ -576,8 +580,18 @@ with tab4:
             if final_selected_comps:
                 st.divider()
                 st.subheader("3. 🚀 目標信號萃取與特徵矩陣重構 (Signal Extraction & Reconstruction)")
+                
+                # 將提取前 N 個基因特徵的設定移到這裡
+                st.markdown("💡 **操作說明**：設定每個被選中的成分中，要保留多少個最具代表性（權重最高）的基因特徵。接著系統將比對這些特徵並重構出最終矩陣。")
+                top_n_val = st.number_input("每個成分要保留前 N 個基因特徵 (輸入 0 匯出全部):", min_value=0, max_value=len(H_matrix.columns), value=15, step=1)
+                use_top_n = top_n_val if top_n_val > 0 else None
 
-                with st.spinner('計算特徵交集與強度排序中...'):
+                with st.spinner('解析 H 矩陣並計算特徵交集中...'):
+                    # 依據 N 的設定解析 H 矩陣
+                    sorted_features_dict = extract_sorted_features_from_H(H_matrix, top_n=use_top_n)
+                    all_features_df = pd.concat(sorted_features_dict, names=['Component', 'DropIndex']).reset_index(level='DropIndex', drop=True).reset_index()
+                    
+                    # 篩選出使用者選取的成分
                     filtered_features_df = all_features_df[all_features_df['Component'].isin(final_selected_comps)]
                     feat_col_name = 'Feature' if 'Feature' in filtered_features_df.columns else filtered_features_df.columns[1]
                     
@@ -622,17 +636,15 @@ with tab4:
                     st.dataframe(style_summary_table(plot_ready_df), use_container_width=True, height=400)
                     st.caption(f"📊 排序說明：優先顯示多組共有特徵 (Shared)，並結合該特徵在各 Component 的出現權重排列。")
 
-                    # ===== 新增：下載 display_summary 的功能 =====
-                    # 確保包含 index (ASV_Feature 名稱) 並使用 utf-8-sig 避免 Excel 亂碼
+                    # 下載 display_summary
                     csv_summary = display_summary.to_csv(index=True).encode('utf-8-sig')
                     st.download_button(
                         label="📥 下載詳細分佈表 (CSV)",
                         data=csv_summary,
                         file_name="ASV_Feature_Summary.csv",
                         mime="text/csv",
-                        key="download_summary_btn"  # 加上 key 避免與其他下載按鈕衝突
+                        key="download_summary_btn" 
                     )
-                    # ============================================
 
                 # --- 策略卡片與重構執行 ---
                 st.markdown("🎯 請選擇重構策略：")
@@ -698,4 +710,4 @@ with tab4:
                         mime="text/csv"
                     )
             else:
-                st.warning("⚠️ 請選擇至少一個成分。")
+                st.warning("⚠️ 請從步驟 2 選擇至少一個成分以繼續。")
