@@ -702,11 +702,33 @@ with tab4:
                     
                     st.dataframe(recon_df.head(15).style.background_gradient(subset=recon_df.columns[1:], cmap='BuPu'), use_container_width=True)
                     
+                    # 1. 解析策略名稱，轉換為適合檔名的文字
+                    if "所有特徵" in strat:
+                        strat_name = "All"
+                    elif "極致專屬" in strat:
+                        strat_name = "Exclusive"
+                    elif "核心共用" in strat:
+                        strat_name = "CoreShared"
+                    else:
+                        strat_name = "Custom"
+                    
+                    # 2. 處理成分名稱 (如果選太多個，就只顯示數量避免檔名過長)
+                    if len(final_selected_comps) <= 5:
+                        comps_str = "_".join(sort_comps(final_selected_comps))
+                    else:
+                        comps_str = f"{len(final_selected_comps)}Comps"
+                        
+                    # 3. 取得特徵數量 (總欄位數減去 1 個 Y 標籤欄位)
+                    feature_count = recon_df.shape[1] - 1
+                    
+                    # 4. 組合動態檔名
+                    dynamic_filename = f"Reconstructed_{comps_str}_{strat_name}_{feature_count}ASVs.csv"
+                    
                     csv_data = recon_df.to_csv(index=False).encode('utf-8-sig')
                     st.download_button(
-                        label="📥 下載完整重構矩陣 (CSV)", 
+                        label=f"📥 下載重構矩陣 ({dynamic_filename})", 
                         data=csv_data, 
-                        file_name="NMF_Reconstructed_Matrix.csv", 
+                        file_name=dynamic_filename, 
                         mime="text/csv"
                     )
             else:
