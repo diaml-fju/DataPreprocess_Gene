@@ -654,12 +654,12 @@ with tab4:
                     st.info(f"🌐 **保留所有特徵**\n\n共 {count_all} 個 ASVs")
                 with c2:
                     count_unique = len(summary_df[summary_df["Total_Appearance"] == 1])
-                    st.warning(f"🏷️ **專屬生物標記 (Exclusive)**\n\n共 {count_unique} 個 ASVs")
+                    st.warning(f"🏷️ **專屬生物特徵 (Exclusive)**\n\n共 {count_unique} 個 ASVs")
                 with c3:
                     count_shared = len(summary_df[summary_df.get("Shared_in_All", summary_df["Total_Appearance"] == len(final_selected_comps)) == 1])
-                    st.success(f"🤝 **核心共用 (Core Shared)**\n\n共 {count_shared} 個 ASVs")
+                    st.success(f"🤝 **核心共用特徵 (Core Shared)**\n\n共 {count_shared} 個 ASVs")
 
-                strategy = st.radio("選擇萃取策略：", options=["🌐 保留所有特徵 (預設)", "🏷️ 僅保留極致專屬特徵", "🤝 僅保留核心共用特徵"], horizontal=True)
+                strategy = st.radio("選擇萃取策略：", options=["🌐 保留所有特徵 (預設)", "🏷️ 僅保留專屬生物特徵", "🤝 僅保留核心共用特徵"], horizontal=True)
 
                 if st.button("⚡ 執行目標矩陣重構 (Reconstruct)"):
                     with st.spinner("執行局部內積重構運算中..."):
