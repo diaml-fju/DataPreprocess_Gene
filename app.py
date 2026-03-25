@@ -745,7 +745,7 @@ with tab4:
 
 with tab5:
     st.header("🤖 第五步：機器學習模型訓練與驗證 (LOOCV)")
-    st.markdown("上傳您的特徵重構矩陣，系統將自動進行特徵縮放，並使用 Leave-One-Out 與 GridSearch 訓練您選擇的模型。")
+    st.markdown("上傳您的特徵重構矩陣，系統將自動進行特徵縮放，並使用 Leave-One-Out 訓練您選擇的模型。")
 
     # --- 1. 檔案上傳與資料準備 ---
     file_model_data = st.file_uploader("📂 上傳重構後的特徵資料 (CSV，需包含 Y 標籤)", type=["csv"], key="model_data_up")
@@ -770,19 +770,32 @@ with tab5:
             default=available_models
         )
 
+        # 💡 新增：尋優模式切換開關
+        tuning_mode = st.radio(
+            "請選擇運算模式：",
+            options=[
+                "⚡ 快速模式 (不進行 GridSearch，使用預設參數，速度極快)", 
+                "🔍 深度模式 (使用 GridSearch 尋找最佳參數，需耗費較長時間)"
+            ],
+            horizontal=False
+        )
+        use_gridsearch = "深度模式" in tuning_mode
+
         # ==========================================
         # --- 模型訓練區塊 (按下按鈕才執行，執行完存入大腦) ---
         # ==========================================
-        if st.button("🚀 開始訓練模型 (這可能需要幾分鐘時間)"):
+        if st.button("🚀 開始訓練模型"):
             if not selected_models:
                 st.warning("⚠️ 請至少選擇一個模型來進行訓練！")
             else:
-                with st.spinner("資料前處理與模型訓練中，請耐心等候..."):
+                mode_text = "深度尋優" if use_gridsearch else "快速"
+                with st.spinner(f"正在執行{mode_text}模型訓練，請耐心等候..."):
                     
                     # 資料前處理
                     X_raw = df.drop(y_col, axis=1).copy()
                     Y_raw = df[y_col].copy().values
                     
+                    from sklearn.preprocessing import MinMaxScaler
                     MMscaler = MinMaxScaler(feature_range=(0, 1))
                     X_normalized = MMscaler.fit_transform(X_raw)
                     X_df = pd.DataFrame(data=X_normalized, columns=X_raw.columns)
@@ -800,14 +813,14 @@ with tab5:
                     models_setup = {k: v for k, v in all_models_setup.items() if k in selected_models}
                     cross_val = LeaveOneOut()
                     
-                    # 💡 確保這個變數有被宣告
                     all_model_results = {}
-                    
                     progress_bar = st.progress(0)
                     total_models = len(models_setup)
                     
                     # 開始迴圈訓練
-                    for m_idx, (model_name, (clf)) in enumerate(models_setup.items()):
+                    from sklearn.base import clone # 用於確保快速模式每次都重置模型狀態
+                    
+                    for m_idx, (model_name, (clf_base, param_grid)) in enumerate(models_setup.items()):
                         st.toast(f"正在訓練 {model_name}...")
                         
                         each_round_y_probability = []
@@ -818,19 +831,23 @@ with tab5:
                             Y_train = np.delete(Y_raw, i)
                             X_test = X_df.iloc[[i]]
                             
-                            # 💡 這裡的 n_jobs 已經幫你設定為 1，避免 Windows 報錯
-                            gridS_model = GridSearchCV(
-                                estimator=clf,
-                                #param_grid=param_grid,
-                                scoring='accuracy',
-                                n_jobs=1,
-                                cv=cross_val, 
-                                verbose=0,
-                                refit=True
-                            )
-                            
-                            gridS_model.fit(X_train, Y_train) 
-                            train_model = gridS_model.best_estimator_
+                            # 💡 核心邏輯切換：根據使用者的選擇決定要不要包 GridSearch
+                            if use_gridsearch:
+                                gridS_model = GridSearchCV(
+                                    estimator=clf_base,
+                                    param_grid=param_grid,
+                                    scoring='accuracy',
+                                    n_jobs=1,
+                                    cv=cross_val, 
+                                    verbose=0,
+                                    refit=True
+                                )
+                                gridS_model.fit(X_train, Y_train) 
+                                train_model = gridS_model.best_estimator_
+                            else:
+                                # 快速模式：複製一個乾淨的基礎模型直接訓練
+                                train_model = clone(clf_base)
+                                train_model.fit(X_train, Y_train)
                             
                             y_prob_pred = train_model.predict_proba(X_test)[0, 1] 
                             prediction = train_model.predict(X_test)[0]
@@ -890,9 +907,9 @@ with tab5:
                         }
 
                     progress_bar.empty()
-                    st.success("✅ 所有選定模型訓練與評估完成！請在下方查看結果。")
+                    st.success(f"✅ 所有選定模型 ({mode_text}模式) 訓練與評估完成！請在下方查看結果。")
                     
-                    # 💡 訓練完畢！把結果寫入 session_state (暫存記憶)
+                    # 💡 訓練完畢！把結果寫入 session_state
                     st.session_state['trained_results'] = all_model_results
                     st.session_state['trained_models_keys'] = list(models_setup.keys())
 
@@ -900,7 +917,6 @@ with tab5:
         # --- 結果顯示區塊 (直接從大腦讀取，避免重跑) ---
         # ==========================================
         if 'trained_results' in st.session_state:
-            # 從暫存記憶中把資料拿出來
             saved_results = st.session_state['trained_results']
             saved_keys = st.session_state['trained_models_keys']
             
@@ -939,7 +955,7 @@ with tab5:
                 df_melted = df_compare.reset_index().melt(id_vars="Model", value_vars=metric_cols, var_name="Metric", value_name="Score")
                 
                 fig, ax = plt.subplots(figsize=(10, 5))
-                sns.barplot(data=df_melted, x="Metric", y="Score", hue="Model", palette="viridis", ax=ax)
+                sns.barplot(data=df_melted, x="Metric", y="Score", hue="Model", palette="Set2", ax=ax)
                 ax.set_title("Performance Metrics Comparison across Models")
                 ax.set_ylabel("Score (%)")
                 ax.set_ylim(0, 105) 
@@ -977,7 +993,6 @@ with tab5:
                         st.markdown("**預測明細**")
                         st.dataframe(res['predictions'], use_container_width=True, height=200)
                         
-                    # 💡 這裡包裝了加強版的 CSV (附帶混淆矩陣)
                     export_df = res['predictions'].copy()
                     export_df[' | '] = '' 
                     export_df['Confusion Matrix'] = ''
