@@ -807,7 +807,7 @@ with tab5:
                     total_models = len(models_setup)
                     
                     # 開始迴圈訓練
-                    for m_idx, (model_name, (clf, param_grid)) in enumerate(models_setup.items()):
+                    for m_idx, (model_name, (clf)) in enumerate(models_setup.items()):
                         st.toast(f"正在訓練 {model_name}...")
                         
                         each_round_y_probability = []
