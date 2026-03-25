@@ -745,7 +745,7 @@ with tab4:
 
 with tab5:
     st.header("🤖 第五步：機器學習模型訓練與驗證 (LOOCV)")
-    st.markdown("上傳您的特徵重構矩陣，系統將自動進行特徵縮放，並使用 Leave-One-Out 訓練您選擇的模型。")
+    st.markdown("上傳您的特徵重構矩陣，系統將自動進行特徵縮放，並使用 Leave-One-Out 與 GridSearch 訓練您選擇的模型。")
 
     # --- 1. 檔案上傳與資料準備 ---
     file_model_data = st.file_uploader("📂 上傳重構後的特徵資料 (CSV，需包含 Y 標籤)", type=["csv"], key="model_data_up")
@@ -770,58 +770,51 @@ with tab5:
             default=available_models
         )
 
-        # 💡 新增：尋優模式切換開關
-        tuning_mode = st.radio(
-            "請選擇運算模式：",
-            options=[
-                "⚡ 快速模式 (不進行 GridSearch，使用預設參數，速度極快)", 
-                "🔍 深度模式 (使用 GridSearch 尋找最佳參數，需耗費較長時間)"
-            ],
-            horizontal=False
-        )
-        use_gridsearch = "深度模式" in tuning_mode
+        # 預先開好外層的 Tabs，讓訓練過程可以直接把結果「塞」進去
+        if selected_models:
+            tab_names = ["🏆 綜合比較"] + selected_models
+            tabs = st.tabs(tab_names)
+        else:
+            tabs = []
 
         # ==========================================
-        # --- 模型訓練區塊 (按下按鈕才執行，執行完存入大腦) ---
+        # --- 模型訓練區塊 ---
         # ==========================================
-        if st.button("🚀 開始訓練模型"):
+        if st.button("🚀 開始嚴謹訓練 (包含 GridSearch，這需要一些時間)"):
             if not selected_models:
                 st.warning("⚠️ 請至少選擇一個模型來進行訓練！")
             else:
-                mode_text = "深度尋優" if use_gridsearch else "快速"
-                with st.spinner(f"正在執行{mode_text}模型訓練，請耐心等候..."):
-                    
-                    # 資料前處理
-                    X_raw = df.drop(y_col, axis=1).copy()
-                    Y_raw = df[y_col].copy().values
-                    
-                    from sklearn.preprocessing import MinMaxScaler
-                    MMscaler = MinMaxScaler(feature_range=(0, 1))
-                    X_normalized = MMscaler.fit_transform(X_raw)
-                    X_df = pd.DataFrame(data=X_normalized, columns=X_raw.columns)
-                    
-                    # 模型與參數設定
-                    all_models_setup = {
-                        "XGBoost": (xgb.XGBClassifier(missing=np.nan, random_state=4), 
-                                    {'max_depth': [4, 5, 6], 'gamma': [0, 0.25, 1.0], 'scale_pos_weight': [1, 3, 5]}),
-                        "Random Forest": (RandomForestClassifier(random_state=4), 
-                                          {'max_depth': [None, 5, 10], 'n_estimators': [50, 100]}),
-                        "Lasso (L1 Logistic)": (LogisticRegression(penalty='l1', solver='liblinear', random_state=4), 
-                                                {'C': [0.1, 1.0, 10.0]})
-                    }
-                    
-                    models_setup = {k: v for k, v in all_models_setup.items() if k in selected_models}
-                    cross_val = LeaveOneOut()
-                    
-                    all_model_results = {}
-                    progress_bar = st.progress(0)
-                    total_models = len(models_setup)
-                    
-                    # 開始迴圈訓練
-                    from sklearn.base import clone # 用於確保快速模式每次都重置模型狀態
-                    
-                    for m_idx, (model_name, (clf_base, param_grid)) in enumerate(models_setup.items()):
-                        st.toast(f"正在訓練 {model_name}...")
+                # 每次按下按鈕，清空舊的記憶，準備重新訓練
+                st.session_state['trained_results'] = {}
+                st.session_state['trained_models_keys'] = selected_models
+                
+                # 資料前處理
+                X_raw = df.drop(y_col, axis=1).copy()
+                Y_raw = df[y_col].copy().values
+                
+                MMscaler = MinMaxScaler(feature_range=(0, 1))
+                X_normalized = MMscaler.fit_transform(X_raw)
+                X_df = pd.DataFrame(data=X_normalized, columns=X_raw.columns)
+                
+                # 模型與參數設定
+                all_models_setup = {
+                    "XGBoost": (xgb.XGBClassifier(missing=np.nan, random_state=4), 
+                                {'max_depth': [4, 5, 6], 'gamma': [0, 0.25, 1.0], 'scale_pos_weight': [1, 3, 5]}),
+                    "Random Forest": (RandomForestClassifier(random_state=4), 
+                                      {'max_depth': [None, 5, 10], 'n_estimators': [50, 100]}),
+                    "Lasso (L1 Logistic)": (LogisticRegression(penalty='l1', solver='liblinear', random_state=4), 
+                                            {'C': [0.1, 1.0, 10.0]})
+                }
+                
+                models_setup = {k: v for k, v in all_models_setup.items() if k in selected_models}
+                cross_val = LeaveOneOut()
+                
+                progress_bar = st.progress(0)
+                total_models = len(models_setup)
+                
+                # 💡 開始迴圈訓練 (做完一個印一個)
+                for m_idx, (model_name, (clf, param_grid)) in enumerate(models_setup.items()):
+                    with st.spinner(f"正在執行 {model_name} 的 LOOCV 與 GridSearch..."):
                         
                         each_round_y_probability = []
                         each_round_y_prediction = []
@@ -831,23 +824,19 @@ with tab5:
                             Y_train = np.delete(Y_raw, i)
                             X_test = X_df.iloc[[i]]
                             
-                            # 💡 核心邏輯切換：根據使用者的選擇決定要不要包 GridSearch
-                            if use_gridsearch:
-                                gridS_model = GridSearchCV(
-                                    estimator=clf_base,
-                                    param_grid=param_grid,
-                                    scoring='accuracy',
-                                    n_jobs=1,
-                                    cv=cross_val, 
-                                    verbose=0,
-                                    refit=True
-                                )
-                                gridS_model.fit(X_train, Y_train) 
-                                train_model = gridS_model.best_estimator_
-                            else:
-                                # 快速模式：複製一個乾淨的基礎模型直接訓練
-                                train_model = clone(clf_base)
-                                train_model.fit(X_train, Y_train)
+                            # 維持 n_jobs=1，避免 Windows 系統暫存檔報錯
+                            gridS_model = GridSearchCV(
+                                estimator=clf,
+                                param_grid=param_grid,
+                                scoring='accuracy',
+                                n_jobs=1,
+                                cv=cross_val, 
+                                verbose=0,
+                                refit=True
+                            )
+                            
+                            gridS_model.fit(X_train, Y_train) 
+                            train_model = gridS_model.best_estimator_
                             
                             y_prob_pred = train_model.predict_proba(X_test)[0, 1] 
                             prediction = train_model.predict(X_test)[0]
@@ -891,8 +880,8 @@ with tab5:
                             'y_pred_adjusted': final_prediction
                         })
                         
-                        # 把每個模型的結果存進字典
-                        all_model_results[model_name] = {
+                        # 將完成的模型結果寫入暫存記憶
+                        st.session_state['trained_results'][model_name] = {
                             "metrics": {
                                 "Accuracy (%)": round(accuracy * 100, 2),
                                 "AUC (%)": round(auc_value * 100, 2),
@@ -906,23 +895,34 @@ with tab5:
                             "predictions": result_df
                         }
 
-                    progress_bar.empty()
-                    st.success(f"✅ 所有選定模型 ({mode_text}模式) 訓練與評估完成！請在下方查看結果。")
-                    
-                    # 💡 訓練完畢！把結果寫入 session_state
-                    st.session_state['trained_results'] = all_model_results
-                    st.session_state['trained_models_keys'] = list(models_setup.keys())
+                        # 💡 核心優化：做完一個模型，立刻把數據畫在它對應的 Tab 裡！
+                        # (m_idx + 1 是因為 tabs[0] 是留給綜合比較的)
+                        with tabs[m_idx + 1]:
+                            st.success(f"✅ {model_name} 運算完成！下方為即時結果：")
+                            res = st.session_state['trained_results'][model_name]
+                            
+                            m1, m2, m3, m4 = st.columns(4)
+                            m1.metric("Accuracy", f"{res['metrics']['Accuracy (%)']}%")
+                            m2.metric("AUC", f"{res['metrics']['AUC (%)']}%")
+                            m3.metric("F1 Score", f"{res['metrics']['F1 Score (%)']}%")
+                            m4.metric("最佳 Threshold", f"{res['metrics']['Threshold']}")
+                            
+                            st.info("💡 預測明細與下載按鈕將在所有模型跑完後一併產生。")
+
+                # 所有迴圈結束
+                progress_bar.empty()
+                st.toast("🎉 所有模型都跑完囉！")
+                # 重新整理畫面，讓系統將完整的按鈕與圖表渲染出來 (避免按鈕被刷新吃掉)
+                st.rerun()
 
         # ==========================================
-        # --- 結果顯示區塊 (直接從大腦讀取，避免重跑) ---
+        # --- 最終結果顯示區塊 (直接從大腦讀取) ---
         # ==========================================
-        if 'trained_results' in st.session_state:
+        if 'trained_results' in st.session_state and len(st.session_state['trained_results']) > 0:
             saved_results = st.session_state['trained_results']
             saved_keys = st.session_state['trained_models_keys']
             
-            st.divider()
-            
-            # 建立比較用 DataFrame
+            # 建立綜合比較 DataFrame
             comparison_data = []
             for name, res in saved_results.items():
                 row = res["metrics"].copy()
@@ -930,10 +930,6 @@ with tab5:
                 comparison_data.append(row)
             df_compare = pd.DataFrame(comparison_data).set_index("Model")
 
-            # 設定 Tabs
-            tab_names = ["🏆 綜合比較"] + saved_keys
-            tabs = st.tabs(tab_names)
-            
             # --- Tab 0: 綜合比較 ---
             with tabs[0]:
                 st.subheader("📊 模型效能總覽")
@@ -964,57 +960,60 @@ with tab5:
                 plt.tight_layout()
                 st.pyplot(fig)
 
-            # --- 後續 Tabs: 各別模型詳細資料 ---
+            # --- 後續 Tabs: 各別模型詳細資料與下載按鈕 ---
             for idx, model_name in enumerate(saved_keys):
-                res = saved_results[model_name]
-                
-                with tabs[idx+1]:
-                    st.subheader(f"📈 {model_name} 結果報表")
+                # 確保這個模型真的有成功存入記憶中
+                if model_name in saved_results:
+                    res = saved_results[model_name]
                     
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Accuracy", f"{res['metrics']['Accuracy (%)']}%")
-                    m2.metric("AUC", f"{res['metrics']['AUC (%)']}%")
-                    m3.metric("F1 Score", f"{res['metrics']['F1 Score (%)']}%")
-                    m4.metric("最佳 Threshold", f"{res['metrics']['Threshold']}")
-                    
-                    m5, m6, m7, m8 = st.columns(4)
-                    m5.metric("Sensitivity", f"{res['metrics']['Sensitivity (%)']}%")
-                    m6.metric("Specificity", f"{res['metrics']['Specificity (%)']}%")
-                    m7.metric("Precision", f"{res['metrics']['Precision (%)']}%")
-                    
-                    st.divider()
-                    col_conf, col_pred = st.columns([1, 2])
-                    
-                    with col_conf:
-                        st.markdown("**混淆矩陣**")
-                        st.dataframe(pd.DataFrame(res['confusion'], columns=["Pred 0", "Pred 1"], index=["True 0", "True 1"]), use_container_width=True)
+                    with tabs[idx+1]:
+                        st.subheader(f"📈 {model_name} 結果報表")
                         
-                    with col_pred:
-                        st.markdown("**預測明細**")
-                        st.dataframe(res['predictions'], use_container_width=True, height=200)
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("Accuracy", f"{res['metrics']['Accuracy (%)']}%")
+                        m2.metric("AUC", f"{res['metrics']['AUC (%)']}%")
+                        m3.metric("F1 Score", f"{res['metrics']['F1 Score (%)']}%")
+                        m4.metric("最佳 Threshold", f"{res['metrics']['Threshold']}")
                         
-                    export_df = res['predictions'].copy()
-                    export_df[' | '] = '' 
-                    export_df['Confusion Matrix'] = ''
-                    export_df['Pred 0'] = np.nan
-                    export_df['Pred 1'] = np.nan
-                    
-                    cm = res['confusion']
-                    if len(export_df) >= 2 and cm.shape == (2, 2):
-                        export_df.loc[0, 'Confusion Matrix'] = 'True 0'
-                        export_df.loc[0, 'Pred 0'] = int(cm[0, 0])
-                        export_df.loc[0, 'Pred 1'] = int(cm[0, 1])
+                        m5, m6, m7, m8 = st.columns(4)
+                        m5.metric("Sensitivity", f"{res['metrics']['Sensitivity (%)']}%")
+                        m6.metric("Specificity", f"{res['metrics']['Specificity (%)']}%")
+                        m7.metric("Precision", f"{res['metrics']['Precision (%)']}%")
                         
-                        export_df.loc[1, 'Confusion Matrix'] = 'True 1'
-                        export_df.loc[1, 'Pred 0'] = int(cm[1, 0])
-                        export_df.loc[1, 'Pred 1'] = int(cm[1, 1])
-                    
-                    csv = export_df.to_csv(index=False).encode('utf-8-sig')
-                    
-                    st.download_button(
-                        label=f"📥 下載 {model_name} 預測明細與混淆矩陣",
-                        data=csv,
-                        file_name=f"{model_name}_LOOCV_Results.csv",
-                        mime="text/csv",
-                        key=f"download_{model_name}_btn"
-                    )
+                        st.divider()
+                        col_conf, col_pred = st.columns([1, 2])
+                        
+                        with col_conf:
+                            st.markdown("**混淆矩陣**")
+                            st.dataframe(pd.DataFrame(res['confusion'], columns=["Pred 0", "Pred 1"], index=["True 0", "True 1"]), use_container_width=True)
+                            
+                        with col_pred:
+                            st.markdown("**預測明細**")
+                            st.dataframe(res['predictions'], use_container_width=True, height=200)
+                            
+                        # 混淆矩陣寫入 CSV 邏輯
+                        export_df = res['predictions'].copy()
+                        export_df[' | '] = '' 
+                        export_df['Confusion Matrix'] = ''
+                        export_df['Pred 0'] = np.nan
+                        export_df['Pred 1'] = np.nan
+                        
+                        cm = res['confusion']
+                        if len(export_df) >= 2 and cm.shape == (2, 2):
+                            export_df.loc[0, 'Confusion Matrix'] = 'True 0'
+                            export_df.loc[0, 'Pred 0'] = int(cm[0, 0])
+                            export_df.loc[0, 'Pred 1'] = int(cm[0, 1])
+                            
+                            export_df.loc[1, 'Confusion Matrix'] = 'True 1'
+                            export_df.loc[1, 'Pred 0'] = int(cm[1, 0])
+                            export_df.loc[1, 'Pred 1'] = int(cm[1, 1])
+                        
+                        csv = export_df.to_csv(index=False).encode('utf-8-sig')
+                        
+                        st.download_button(
+                            label=f"📥 下載 {model_name} 預測明細與混淆矩陣",
+                            data=csv,
+                            file_name=f"{model_name}_LOOCV_Results.csv",
+                            mime="text/csv",
+                            key=f"download_{model_name}_btn"
+                        )
