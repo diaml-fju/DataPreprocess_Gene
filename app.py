@@ -731,7 +731,7 @@ with tab4:
                     feature_count = recon_df.shape[1] - 1
                     
                     # 4. 組合動態檔名
-                    dynamic_filename = f"Reconstructed_{comps_str}_{strat_name}_{feature_count}ASVs.csv"
+                    dynamic_filename = f"Reconstructed_{comps_str}_Top{use_top_n}_{strat_name}_{feature_count}ASVs.csv"
                     
                     csv_data = recon_df.to_csv(index=False).encode('utf-8-sig')
                     st.download_button(
@@ -775,7 +775,7 @@ with tab5:
         selected_models = [m for m in available_models if m in user_selected_models]
 
         # 💡 調整 2：把執行按鈕移到這裡 (模型選擇的正下方)
-        start_training_btn = st.button("🚀 開始嚴謹訓練 (包含 GridSearch，這需要一些時間)")
+        start_training_btn = st.button("🚀 開始訓練 (包含 GridSearch，這需要一些時間)")
 
         # 預先開好外層的 Tabs，排在按鈕的下方，讓結果可以塞進去
         if selected_models:
