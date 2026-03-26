@@ -554,7 +554,7 @@ with tab4:
             # ==========================================
             st.divider()
             st.subheader("2. H 矩陣解析：選擇目標成分")
-            st.markdown("💡 **操作說明**：請根據上方的分析結果，挑選出您感興趣的特定成分（例如：只選取兩組共用的成分，或某組獨有的成分）。這些被選中的成分將作為下一步基因萃取的基礎庫。")
+            st.markdown("💡 **操作說明**：請根據上方的分析結果，挑選出您感興趣的特定成分。這些被選中的成分將作為下一步基因萃取的基礎庫。")
             
             classes = df_w[class_col_target].unique().tolist()
             radio_options = ["🤝 共同成分 (Shared)", "🏷️ 所有獨立成分 (All Unique)"]
@@ -576,7 +576,7 @@ with tab4:
                     selected_comps_auto = next((val for key, val in class_comparison.items() if "Unique" in key and str(c1) in key), set())
 
             final_selected_comps = st.multiselect(
-                "✨ 系統已自動帶入成分，請確認或手動調整 (這些成分將進入下一步進行萃取)：",
+                "✨ 系統已自動帶入成分，請確認或手動調整：",
                 options=sort_comps(H_matrix.index.tolist()), 
                 default=sort_comps(selected_comps_auto)
             )
@@ -588,17 +588,14 @@ with tab4:
                 st.divider()
                 st.subheader("3. 🚀 目標信號萃取與特徵矩陣重構 (Signal Extraction & Reconstruction)")
                 
-                # 將提取前 N 個基因特徵的設定移到這裡
                 st.markdown("💡 **操作說明**：設定每個被選中的成分中，要保留多少個最具代表性（權重最高）的基因特徵。接著系統將比對這些特徵並重構出最終矩陣。")
                 top_n_val = st.number_input("每個成分要保留前 N 個基因特徵 (輸入 0 匯出全部):", min_value=0, max_value=len(H_matrix.columns), value=15, step=1)
                 use_top_n = top_n_val if top_n_val > 0 else None
 
                 with st.spinner('解析 H 矩陣並計算特徵交集中...'):
-                    # 依據 N 的設定解析 H 矩陣
                     sorted_features_dict = extract_sorted_features_from_H(H_matrix, top_n=use_top_n)
                     all_features_df = pd.concat(sorted_features_dict, names=['Component', 'DropIndex']).reset_index(level='DropIndex', drop=True).reset_index()
                     
-                    # 篩選出使用者選取的成分
                     filtered_features_df = all_features_df[all_features_df['Component'].isin(final_selected_comps)]
                     feat_col_name = 'Feature' if 'Feature' in filtered_features_df.columns else filtered_features_df.columns[1]
                     
@@ -643,7 +640,6 @@ with tab4:
                     st.dataframe(style_summary_table(plot_ready_df), use_container_width=True, height=400)
                     st.caption(f"📊 排序說明：優先顯示多組共有特徵 (Shared)，並結合該特徵在各 Component 的出現權重排列。")
 
-                    # 下載 display_summary
                     csv_summary = display_summary.to_csv(index=True).encode('utf-8-sig')
                     st.download_button(
                         label="📥 下載詳細分佈表 (CSV)",
@@ -655,26 +651,41 @@ with tab4:
 
                 # --- 策略卡片與重構執行 ---
                 st.markdown("🎯 請選擇重構策略：")
-                c1, c2, c3 = st.columns(3)
+                
+                c1, c2, c3, c4 = st.columns(4)
                 with c1:
                     count_all = len(summary_df)
                     st.info(f"🌐 **保留所有特徵**\n\n共 {count_all} 個 ASVs")
                 with c2:
                     count_unique = len(summary_df[summary_df["Total_Appearance"] == 1])
-                    st.warning(f"🏷️ **專屬生物特徵 (Exclusive)**\n\n共 {count_unique} 個 ASVs")
+                    st.warning(f"🏷️ **專屬生物特徵**\n\n共 {count_unique} 個 ASVs")
                 with c3:
                     count_shared = len(summary_df[summary_df.get("Shared_in_All", summary_df["Total_Appearance"] == len(final_selected_comps)) == 1])
-                    st.success(f"🤝 **核心共用特徵 (Core Shared)**\n\n共 {count_shared} 個 ASVs")
+                    st.success(f"🤝 **核心共用特徵**\n\n共 {count_shared} 個 ASVs")
+                with c4:
+                    # 💡 邏輯同步：不等於 1 (也就是把等於 1 的拿掉)
+                    count_non_unique = len(summary_df[summary_df["Total_Appearance"] != 1])
+                    st.error(f"🗑️ **剔除專屬特徵**\n\n共 {count_non_unique} 個 ASVs")
 
-                strategy = st.radio("選擇萃取策略：", options=["🌐 保留所有特徵 (預設)", "🏷️ 僅保留專屬生物特徵", "🤝 僅保留核心共用特徵"], horizontal=True)
+                # 💡 文字同步：改成你順眼的寫法
+                strategy = st.radio("選擇萃取策略：", 
+                                    options=[
+                                        "🌐 保留所有特徵 (預設)", 
+                                        "🏷️ 僅保留專屬生物特徵", 
+                                        "🤝 僅保留核心共用特徵",
+                                        "🗑️ 剔除專屬特徵 (把獨特的 1 拿掉)"
+                                    ], 
+                                    horizontal=True)
 
                 if st.button("⚡ 執行目標矩陣重構 (Reconstruct)"):
                     with st.spinner("執行局部內積重構運算中..."):
-                        # 💡 修正 1：確保判斷字眼與 Radio 選項一致
                         if "專屬生物" in strategy:
                             final_asv_summary = summary_df[summary_df["Total_Appearance"] == 1]
                         elif "核心共用" in strategy:
                             final_asv_summary = summary_df[summary_df.get("Shared_in_All", summary_df["Total_Appearance"] == len(final_selected_comps)) == 1]
+                        elif "剔除專屬" in strategy:
+                            # 💡 程式碼邏輯同步：!= 1
+                            final_asv_summary = summary_df[summary_df["Total_Appearance"] != 1]
                         else:
                             final_asv_summary = summary_df
                             
@@ -710,27 +721,24 @@ with tab4:
                     
                     st.dataframe(recon_df.head(15).style.background_gradient(subset=recon_df.columns[1:], cmap='BuPu'), use_container_width=True)
                     
-                    # 1. 解析策略名稱，轉換為適合檔名的文字
-                    # 💡 修正 2：確保檔名生成邏輯也能抓到正確的字眼
                     if "所有特徵" in strat:
                         strat_name = "All"
                     elif "專屬生物" in strat:
                         strat_name = "Exclusive"
                     elif "核心共用" in strat:
                         strat_name = "CoreShared"
+                    elif "剔除專屬" in strat:
+                        strat_name = "RemovedUnique1"
                     else:
                         strat_name = "Custom"
                     
-                    # 2. 處理成分名稱 (如果選太多個，就只顯示數量避免檔名過長)
                     if len(final_selected_comps) <= 5:
                         comps_str = "_".join(sort_comps(final_selected_comps))
                     else:
                         comps_str = f"{len(final_selected_comps)}Comps"
                         
-                    # 3. 取得特徵數量 (總欄位數減去 1 個 Y 標籤欄位)
                     feature_count = recon_df.shape[1] - 1
                     
-                    # 4. 組合動態檔名
                     dynamic_filename = f"Reconstructed_{comps_str}_Top{use_top_n}_{strat_name}_{feature_count}ASVs.csv"
                     
                     csv_data = recon_df.to_csv(index=False).encode('utf-8-sig')
