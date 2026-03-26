@@ -1026,7 +1026,7 @@ with tab5:
                         )
 
 with tab6:
-    st.header("📊 第六步：群組特徵對比、基因解析與特定成分重構 (Tab 6 專屬)")
+    st.header("📊 第六步：(批量版) 群組特徵對比與重構")
     st.markdown("一站式完成分析：找出群組間的「共同/獨立」成分 $\\rightarrow$ 萃取並篩選出特定分類的基因 $\\rightarrow$ **直接重構出特定生物信號的目標特徵矩陣！**")
     
     col_w_up, col_h_up = st.columns(2)
@@ -1044,6 +1044,9 @@ with tab6:
         else:
             H_matrix = df_h.set_index(df_h.columns[0])
 
+        # ==========================================
+        # 1. W 矩陣分析 (宏觀分群)
+        # ==========================================
         st.divider()
         st.subheader("1. W 矩陣分析：定義群組的「共同」與「獨立」成分")
         
@@ -1056,6 +1059,7 @@ with tab6:
                 topk_per_sample, topk_counts, class_comparison = topk_components_class_comparison(df_w, class_col=class_col_target, top_k=top_k_val)
                 df_topk_counts = topk_counts.fillna(0).astype(int)
             
+            # --- A. 長條圖 ---
             st.markdown(f"**A. 特徵分佈長條圖 (不同群組在各成分的分佈數量)**")
             df_melted = df_topk_counts.reset_index().melt(id_vars=class_col_target, var_name="Component", value_name="Count")
             
@@ -1076,6 +1080,7 @@ with tab6:
                     except: return float('inf')
                 return sorted(list(comps), key=extract_num)
 
+            # --- B. 標籤區 ---
             st.markdown(f"**B. 群組特徵標籤 (Shared vs Unique)**")
             shared_comps, unique_comps, all_present_comps = set(), set(), set()
 
@@ -1097,6 +1102,9 @@ with tab6:
                     comps = set(topk_counts.loc[cls][topk_counts.loc[cls] > 0].index)
                     all_present_comps.update(comps)
 
+            # ==========================================
+            # 2. H 矩陣解析 (選擇成分)
+            # ==========================================
             st.divider()
             st.subheader("2. H 矩陣解析：選擇目標成分")
             
@@ -1110,26 +1118,39 @@ with tab6:
             comp_filter_option = st.radio("快速帶入條件：", options=radio_options, horizontal=True, key="comp_filter_option_tab6")
             
             selected_comps_auto = set()
-            if "共同" in comp_filter_option: selected_comps_auto = shared_comps
-            elif "所有獨立成分" in comp_filter_option: selected_comps_auto = unique_comps
-            elif "只要有出現就算" in comp_filter_option: selected_comps_auto = shared_comps | unique_comps | all_present_comps
+            if "共同" in comp_filter_option: 
+                selected_comps_auto = shared_comps
+            elif "所有獨立成分" in comp_filter_option: 
+                selected_comps_auto = unique_comps
+            elif "只要有出現就算" in comp_filter_option: 
+                # 💡 修復 Bug：直接看原始表，不遺漏任何成分
+                valid_all_comps = [c for c in df_topk_counts.columns if df_topk_counts[c].sum() > 0]
+                selected_comps_auto = set(valid_all_comps)
             elif len(classes) >= 2:
                 if f"({c0})" in comp_filter_option:
                     selected_comps_auto = next((val for key, val in class_comparison.items() if "Unique" in key and str(c0) in key), set())
                 elif f"({c1})" in comp_filter_option:
                     selected_comps_auto = next((val for key, val in class_comparison.items() if "Unique" in key and str(c1) in key), set())
 
+            # 💡 防呆過濾：確保自動帶入的成分存在於 H 矩陣中
+            available_h_comps = H_matrix.index.tolist()
+            safe_defaults = [c for c in selected_comps_auto if c in available_h_comps]
+
             final_selected_comps = st.multiselect(
                 "✨ 系統已自動帶入成分，請確認或手動調整：",
-                options=sort_comps(H_matrix.index.tolist()), 
-                default=sort_comps(selected_comps_auto),
+                options=sort_comps(available_h_comps), 
+                default=sort_comps(safe_defaults),
                 key="final_selected_comps_tab6"
             )
 
+            # ==========================================
+            # 3. 🚀 目標信號萃取與特徵矩陣重構
+            # ==========================================
             if final_selected_comps:
                 st.divider()
                 st.subheader("3. 🚀 目標信號萃取與特徵矩陣重構")
                 
+                st.markdown("💡 **單一測試模式**：先輸入一個 N 值來預覽分佈與確認結果。若要批量生產，請前往本區塊最下方。")
                 top_n_val = st.number_input("每個成分要保留前 N 個基因特徵 (輸入 0 匯出全部):", min_value=0, max_value=len(H_matrix.columns), value=15, step=1, key="top_n_val_tab6")
                 use_top_n = top_n_val if top_n_val > 0 else None
 
@@ -1254,7 +1275,7 @@ with tab6:
                     dynamic_filename = f"Reconstructed_{comps_str}_Top{use_top_n}_{strat_name}_{feature_count}ASVs.csv"
                     
                     csv_data = recon_df.to_csv(index=False).encode('utf-8-sig')
-                    st.download_button(label=f"📥 下載單一重構矩陣 ({dynamic_filename})", data=csv_data, file_name=dynamic_filename, mime="text/csv", key="download_single_tab6")
+                    st.download_button(label=f"📥 下載單一重構矩陣 ({dynamic_filename})", data=csv_data, file_name=dynamic_filename, mime="text/csv", key="download_single_btn_tab6")
 
 
                 # ==========================================
@@ -1266,7 +1287,7 @@ with tab6:
                 import io
                 import zipfile
 
-                # 💡 新增：預設級距選項
+                # 批量級距選單
                 batch_mode = st.radio(
                     "請選擇批量產生的 N 值級距：",
                     options=[
@@ -1278,7 +1299,6 @@ with tab6:
                     key="batch_mode_tab6"
                 )
 
-                # 💡 判斷要帶入哪一組數字
                 if "間隔 50" in batch_mode:
                     batch_n_list = [50, 100, 150, 200, 250, 300]
                 elif "間隔 100" in batch_mode:
@@ -1288,19 +1308,16 @@ with tab6:
                 else:
                     batch_n_list = []
                 
-                # 如果選擇自訂輸入，顯示輸入框
                 if "自訂" in batch_mode:
                     batch_n_input = st.text_input("請輸入多組要測試的 N 值 (以逗號分隔):", value="10, 20, 30", key="batch_n_input_tab6")
                 else:
                     batch_n_input = ""
                 
-                # 給予直覺的提示
                 display_list_text = batch_n_list if "自訂" not in batch_mode else batch_n_input
                 st.info(f"👉 **即將執行的 N 值序列**：`{display_list_text}`")
 
                 if st.button("🗜️ 執行批量重構並打包下載", key="btn_batch_tab6"):
                     try:
-                        # 如果是自訂，就當場解析輸入的文字
                         if "自訂" in batch_mode:
                             batch_n_list = [int(x.strip()) for x in batch_n_input.split(',') if x.strip().isdigit()]
                         
@@ -1310,7 +1327,6 @@ with tab6:
                             zip_buffer = io.BytesIO()
                             progress_text = "📦 正在處理批量生成中..."
                             batch_bar = st.progress(0, text=progress_text)
-                            
                             generated_files = 0
                             
                             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -1380,7 +1396,7 @@ with tab6:
                                     file_name=f"Batch_Reconstructed_Matrices_{strat_name_b}.zip",
                                     mime="application/zip",
                                     type="primary",
-                                    key="download_batch_tab6"
+                                    key="download_batch_btn_tab6"
                                 )
                             else:
                                 st.error("⚠️ 根據您設定的條件與策略，這些 N 值都沒有萃取出符合條件的特徵，因此沒有生成任何檔案。")
