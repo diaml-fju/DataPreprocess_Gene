@@ -179,7 +179,7 @@ def compare_ranked_features_summary(
 st.title("🧬 Gene Study: 階段式自動化分析儀表板")
 
 # 包含第四步的 Tab
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["第一步：CLR 前處理", "第二步：跨資料集對齊", "第三步：NMF 分解", "第四步：特徵解析與群組對比","第五步：機器學習"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["第一步：CLR 前處理", "第二步：跨資料集對齊", "第三步：NMF 分解", "第四步：特徵解析與群組對比","第五步：機器學習","批量重構"])
 
 # ==========================================
 # --- 第一步：CLR 前處理 ---
@@ -744,6 +744,7 @@ with tab4:
                 st.warning("⚠️ 請從步驟 2 選擇至少一個成分以繼續。")
 
 with tab5:
+
     st.header("🤖 第五步：機器學習模型訓練與驗證 (LOOCV)")
     st.markdown("上傳您的特徵重構矩陣，系統將自動進行特徵縮放，並使用 Leave-One-Out 與 GridSearch 訓練您選擇的模型。")
 
@@ -1023,3 +1024,355 @@ with tab5:
                             mime="text/csv",
                             key=f"download_{model_name}_btn"
                         )
+
+with tab6:
+    st.header("📊 第四步：群組特徵對比、基因解析與特定成分重構")
+    st.markdown("一站式完成分析：找出群組間的「共同/獨立」成分 $\\rightarrow$ 萃取並篩選出特定分類的基因 $\\rightarrow$ **直接重構出特定生物信號的目標特徵矩陣！**")
+    
+    col_w_up, col_h_up = st.columns(2)
+    with col_w_up:
+        file_w = st.file_uploader("📂 上傳 W 矩陣 (包含 Y 標籤)", type=["csv"], key="w_up")
+    with col_h_up:
+        file_h = st.file_uploader("📂 上傳 H 矩陣 (特徵基底)", type=["csv"], key="h_up")
+
+    if file_w and file_h:
+        df_w = pd.read_csv(file_w)
+        df_h = pd.read_csv(file_h)
+
+        if 'Component' in df_h.columns:
+            H_matrix = df_h.set_index('Component')
+        else:
+            H_matrix = df_h.set_index(df_h.columns[0])
+
+        # ==========================================
+        # 1. W 矩陣分析 (宏觀分群)
+        # ==========================================
+        st.divider()
+        st.subheader("1. W 矩陣分析：定義群組的「共同」與「獨立」成分")
+        
+        class_col_target = st.selectbox("請選擇 W 矩陣中的目標變數 (Y) 欄位：", df_w.columns)
+        
+        if class_col_target:
+            top_k_val = st.number_input("設定要觀察每個樣本的「前 K 大」成分 (K=1 代表只看最強成分):", min_value=1, max_value=len(H_matrix), value=1, step=1)
+            
+            with st.spinner('運算群組對比中...'):
+                topk_per_sample, topk_counts, class_comparison = topk_components_class_comparison(df_w, class_col=class_col_target, top_k=top_k_val)
+                df_topk_counts = topk_counts.fillna(0).astype(int)
+            
+            # --- A. 長條圖 ---
+            st.markdown(f"**A. 特徵分佈長條圖 (不同群組在各成分的分佈數量)**")
+            df_melted = df_topk_counts.reset_index().melt(id_vars=class_col_target, var_name="Component", value_name="Count")
+            
+            df_melted['Comp_Num'] = df_melted['Component'].apply(lambda x: int(str(x).replace('C', '')) if str(x).startswith('C') and str(x).replace('C', '').isdigit() else 999)
+            df_melted = df_melted.sort_values(['Comp_Num', 'Component'])
+
+            fig_bar, ax_bar = plt.subplots(figsize=(10, 4))
+            sns.barplot(data=df_melted, x="Component", y="Count", hue=class_col_target, palette="Set1", ax=ax_bar)
+            ax_bar.set_title(f"Component Counts by {class_col_target} (Top-{top_k_val} per sample)")
+            ax_bar.set_xlabel("NMF Component")
+            ax_bar.set_ylabel("Count")
+            plt.grid(True, axis='y', linestyle='--', alpha=0.5) 
+            st.pyplot(fig_bar)
+
+            def sort_comps(comps):
+                def extract_num(c):
+                    try: return int(c.replace('C', '')) if isinstance(c, str) and c.startswith('C') else float('inf')
+                    except: return float('inf')
+                return sorted(list(comps), key=extract_num)
+
+            # --- B. 標籤區 ---
+            st.markdown(f"**B. 群組特徵標籤 (Shared vs Unique)**")
+            shared_comps, unique_comps, all_present_comps = set(), set(), set()
+
+            if class_comparison:
+                for k, v in class_comparison.items():
+                    sorted_v = sort_comps(v)
+                    comps_str = ", ".join(sorted_v) if len(v) > 0 else "無"
+                    if "Shared" in k:
+                        shared_comps.update(v)
+                        st.success(f"🤝 **兩組共同成分 (Shared)**: {comps_str}")
+                    elif "Unique" in k:
+                        unique_comps.update(v)
+                        st.warning(f"🏷️ **獨立成分 ({k.replace('Unique_to_Class_', '')})**: {comps_str}")
+                    else:
+                        all_present_comps.update(v)
+                        st.info(f"📊 **{k.replace('Class_', '').replace('_components', '')} (該群體有出現的成分)**: {comps_str}")
+            else:
+                for cls in df_w[class_col_target].unique():
+                    comps = set(topk_counts.loc[cls][topk_counts.loc[cls] > 0].index)
+                    all_present_comps.update(comps)
+
+            # ==========================================
+            # 2. H 矩陣解析 (選擇成分)
+            # ==========================================
+            st.divider()
+            st.subheader("2. H 矩陣解析：選擇目標成分")
+            st.markdown("💡 **操作說明**：請根據上方的分析結果，挑選出您感興趣的特定成分。這些被選中的成分將作為下一步基因萃取的基礎庫。")
+            
+            classes = df_w[class_col_target].unique().tolist()
+            radio_options = ["🤝 共同成分 (Shared)", "🏷️ 所有獨立成分 (All Unique)"]
+            if len(classes) >= 2:
+                c0, c1 = classes[:2]
+                radio_options.extend([f"🏷️ 獨立成分 ({c0})", f"🏷️ 獨立成分 ({c1})"])
+            radio_options.append("🌐 只要有出現就算 (All Present)")
+
+            comp_filter_option = st.radio("快速帶入條件：", options=radio_options, horizontal=True)
+            
+            selected_comps_auto = set()
+            if "共同" in comp_filter_option: selected_comps_auto = shared_comps
+            elif "所有獨立成分" in comp_filter_option: selected_comps_auto = unique_comps
+            elif "只要有出現就算" in comp_filter_option: selected_comps_auto = shared_comps | unique_comps | all_present_comps
+            elif len(classes) >= 2:
+                if f"({c0})" in comp_filter_option:
+                    selected_comps_auto = next((val for key, val in class_comparison.items() if "Unique" in key and str(c0) in key), set())
+                elif f"({c1})" in comp_filter_option:
+                    selected_comps_auto = next((val for key, val in class_comparison.items() if "Unique" in key and str(c1) in key), set())
+
+            final_selected_comps = st.multiselect(
+                "✨ 系統已自動帶入成分，請確認或手動調整：",
+                options=sort_comps(H_matrix.index.tolist()), 
+                default=sort_comps(selected_comps_auto)
+            )
+
+            # ==========================================
+            # 3. 🚀 目標信號萃取與特徵矩陣重構
+            # ==========================================
+            if final_selected_comps:
+                st.divider()
+                st.subheader("3. 🚀 目標信號萃取與特徵矩陣重構")
+                
+                st.markdown("💡 **單一測試模式**：先輸入一個 N 值來預覽分佈與確認結果。若要批量生產，請前往本區塊最下方。")
+                top_n_val = st.number_input("每個成分要保留前 N 個基因特徵 (輸入 0 匯出全部):", min_value=0, max_value=len(H_matrix.columns), value=15, step=1)
+                use_top_n = top_n_val if top_n_val > 0 else None
+
+                with st.spinner('解析 H 矩陣並計算特徵交集中...'):
+                    sorted_features_dict = extract_sorted_features_from_H(H_matrix, top_n=use_top_n)
+                    all_features_df = pd.concat(sorted_features_dict, names=['Component', 'DropIndex']).reset_index(level='DropIndex', drop=True).reset_index()
+                    
+                    filtered_features_df = all_features_df[all_features_df['Component'].isin(final_selected_comps)]
+                    feat_col_name = 'Feature' if 'Feature' in filtered_features_df.columns else filtered_features_df.columns[1]
+                    
+                    df_list_for_summary = []
+                    for comp in final_selected_comps:
+                        df_comp = filtered_features_df[filtered_features_df['Component'] == comp].copy()
+                        df_list_for_summary.append(df_comp)
+                        
+                    summary_df = compare_ranked_features_summary(
+                        df_list=df_list_for_summary,
+                        df_names=final_selected_comps,
+                        feature_col=list(filtered_features_df.columns).index(feat_col_name),
+                        percentage_col=list(filtered_features_df.columns).index('Percentage (%)') if 'Percentage (%)' in filtered_features_df.columns else 3
+                    )
+                    summary_df.index.name = "ASV_Feature"
+
+                    if 'Total_Appearance' not in summary_df.columns:
+                        summary_df['Total_Appearance'] = summary_df[final_selected_comps].sum(axis=1)
+                    
+                    summary_df['Max_Intensity_Score'] = summary_df[final_selected_comps].max(axis=1)
+
+                with st.expander("🔍 檢視 ASV 在各成分間的詳細分佈 (預覽用)", expanded=True):
+                    display_summary = summary_df.copy()
+                    display_summary = display_summary.sort_values(
+                        by=['Total_Appearance', 'Max_Intensity_Score'], 
+                        ascending=[False, False]
+                    )
+                    
+                    show_cols = final_selected_comps + ['Total_Appearance']
+                    plot_ready_df = display_summary[show_cols]
+
+                    def style_summary_table(df):
+                        s = df.style
+                        for col in final_selected_comps:
+                            s = s.map(
+                                lambda v: 'background-color: #1f77b4; color: white; font-weight: bold;' if v > 0 else 'color: #d3d3d3;',
+                                subset=[col]
+                            )
+                        s = s.background_gradient(cmap='Blues', subset=['Total_Appearance'])
+                        return s
+
+                    st.dataframe(style_summary_table(plot_ready_df), use_container_width=True, height=400)
+                    
+                    csv_summary = display_summary.to_csv(index=True).encode('utf-8-sig')
+                    st.download_button(
+                        label="📥 下載詳細分佈表 (CSV)",
+                        data=csv_summary,
+                        file_name="ASV_Feature_Summary.csv",
+                        mime="text/csv",
+                        key="download_summary_btn" 
+                    )
+
+                # --- 單一策略卡片與重構執行 ---
+                st.markdown("🎯 請選擇重構策略：")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    count_all = len(summary_df)
+                    st.info(f"🌐 **保留所有特徵**\n\n共 {count_all} 個 ASVs")
+                with c2:
+                    count_unique = len(summary_df[summary_df["Total_Appearance"] == 1])
+                    st.warning(f"🏷️ **專屬生物特徵 (Exclusive)**\n\n共 {count_unique} 個 ASVs")
+                with c3:
+                    count_shared = len(summary_df[summary_df.get("Shared_in_All", summary_df["Total_Appearance"] == len(final_selected_comps)) == 1])
+                    st.success(f"🤝 **核心共用特徵 (Core Shared)**\n\n共 {count_shared} 個 ASVs")
+
+                strategy = st.radio("選擇萃取策略：", options=["🌐 保留所有特徵 (預設)", "🏷️ 僅保留專屬生物特徵", "🤝 僅保留核心共用特徵"], horizontal=True)
+
+                if st.button("⚡ 執行「單一 N 值」目標矩陣重構"):
+                    with st.spinner("執行局部內積重構運算中..."):
+                        if "專屬生物" in strategy:
+                            final_asv_summary = summary_df[summary_df["Total_Appearance"] == 1]
+                        elif "核心共用" in strategy:
+                            final_asv_summary = summary_df[summary_df.get("Shared_in_All", summary_df["Total_Appearance"] == len(final_selected_comps)) == 1]
+                        else:
+                            final_asv_summary = summary_df
+                            
+                        if len(final_asv_summary) == 0:
+                            st.error(f"⚠️ 在此策略下找不到符合的 ASV。")
+                        else:
+                            target_asvs = final_asv_summary.index.tolist()
+                            def natural_sort_key(s):
+                                return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(s))]
+                            
+                            valid_asvs = sorted([asv for asv in target_asvs if asv in H_matrix.columns], key=natural_sort_key)
+                            valid_w_comps = [c for c in final_selected_comps if c in df_w.columns]
+                            
+                            W_sub = df_w[valid_w_comps].values
+                            H_sub = H_matrix.loc[valid_w_comps, valid_asvs].values
+                            V_reconstructed = np.dot(W_sub, H_sub)
+                            
+                            df_final = pd.DataFrame(V_reconstructed, columns=valid_asvs)
+                            df_final.insert(0, class_col_target, df_w[class_col_target].values)
+                            df_final.index = df_w.index
+                            
+                            st.session_state.reconstructed_df = df_final
+                            st.session_state.current_strategy = strategy
+                            st.success(f"✅ 重構成功！已產生 {len(valid_asvs)} 個特徵的矩陣。")
+
+                if 'reconstructed_df' in st.session_state:
+                    recon_df = st.session_state.reconstructed_df
+                    strat = st.session_state.get('current_strategy', '')
+                    
+                    st.divider()
+                    st.subheader(f"📋 單一重構結果與下載 ({strat})")
+                    st.dataframe(recon_df.head(15).style.background_gradient(subset=recon_df.columns[1:], cmap='BuPu'), use_container_width=True)
+                    
+                    if "所有特徵" in strat: strat_name = "All"
+                    elif "專屬生物" in strat: strat_name = "Exclusive"
+                    elif "核心共用" in strat: strat_name = "CoreShared"
+                    else: strat_name = "Custom"
+                    
+                    if len(final_selected_comps) <= 5: comps_str = "_".join(sort_comps(final_selected_comps))
+                    else: comps_str = f"{len(final_selected_comps)}Comps"
+                        
+                    feature_count = recon_df.shape[1] - 1
+                    dynamic_filename = f"Reconstructed_{comps_str}_Top{use_top_n}_{strat_name}_{feature_count}ASVs.csv"
+                    
+                    csv_data = recon_df.to_csv(index=False).encode('utf-8-sig')
+                    st.download_button(label=f"📥 下載單一重構矩陣 ({dynamic_filename})", data=csv_data, file_name=dynamic_filename, mime="text/csv")
+
+
+                # ==========================================
+                # 📦 批量自動生產區塊
+                # ==========================================
+                st.divider()
+                st.subheader("📦 批量自動生產 (Batch Production)")
+                st.info("💡 系統將會使用您上方選定的「目標成分」與「萃取策略」，為您指定的每一個 N 值獨立重構出一個 CSV 檔案，並全部打包成一個 ZIP 檔方便您一次下載！")
+                
+                import io
+                import zipfile
+
+                batch_n_input = st.text_input("請輸入多組要測試的 N 值 (以逗號分隔，例如: 15, 30, 50, 100):", value="10, 30, 50, 100")
+
+                if st.button("🗜️ 執行批量重構並打包下載"):
+                    try:
+                        batch_n_list = [int(x.strip()) for x in batch_n_input.split(',') if x.strip().isdigit()]
+                        
+                        if not batch_n_list:
+                            st.warning("⚠️ 請輸入有效的數字組合。")
+                        else:
+                            zip_buffer = io.BytesIO()
+                            progress_text = "📦 正在處理批量生成中..."
+                            batch_bar = st.progress(0, text=progress_text)
+                            
+                            generated_files = 0
+                            
+                            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                                for idx, n_val in enumerate(batch_n_list):
+                                    batch_bar.progress((idx) / len(batch_n_list), text=f"📦 正在處理 N={n_val} ({idx+1}/{len(batch_n_list)})...")
+                                    
+                                    # 1. 重新解析該 N 值下的 H 矩陣
+                                    sorted_feat_dict_b = extract_sorted_features_from_H(H_matrix, top_n=n_val if n_val > 0 else None)
+                                    all_feat_df_b = pd.concat(sorted_feat_dict_b, names=['Component', 'DropIndex']).reset_index(level='DropIndex', drop=True).reset_index()
+                                    
+                                    filtered_feat_df_b = all_feat_df_b[all_feat_df_b['Component'].isin(final_selected_comps)]
+                                    if filtered_feat_df_b.empty: continue
+                                    
+                                    # 2. 建立 summary
+                                    feat_col_b = 'Feature' if 'Feature' in filtered_feat_df_b.columns else filtered_feat_df_b.columns[1]
+                                    df_list_b = [filtered_feat_df_b[filtered_feat_df_b['Component'] == comp].copy() for comp in final_selected_comps]
+                                    
+                                    summary_df_b = compare_ranked_features_summary(
+                                        df_list=df_list_b,
+                                        df_names=final_selected_comps,
+                                        feature_col=list(filtered_feat_df_b.columns).index(feat_col_b),
+                                        percentage_col=list(filtered_feat_df_b.columns).index('Percentage (%)') if 'Percentage (%)' in filtered_feat_df_b.columns else 3
+                                    )
+                                    
+                                    if 'Total_Appearance' not in summary_df_b.columns:
+                                        summary_df_b['Total_Appearance'] = summary_df_b[final_selected_comps].sum(axis=1)
+
+                                    # 3. 套用上方選擇的策略
+                                    if "專屬生物" in strategy:
+                                        final_asv_b = summary_df_b[summary_df_b["Total_Appearance"] == 1]
+                                    elif "核心共用" in strategy:
+                                        final_asv_b = summary_df_b[summary_df_b.get("Shared_in_All", summary_df_b["Total_Appearance"] == len(final_selected_comps)) == 1]
+                                    else:
+                                        final_asv_b = summary_df_b
+                                        
+                                    if len(final_asv_b) == 0: continue
+                                    
+                                    # 4. 重構矩陣
+                                    target_asvs_b = final_asv_b.index.tolist()
+                                    valid_asvs_b = sorted([asv for asv in target_asvs_b if asv in H_matrix.columns], key=lambda s: [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(s))])
+                                    valid_w_comps_b = [c for c in final_selected_comps if c in df_w.columns]
+                                    
+                                    W_sub_b = df_w[valid_w_comps_b].values
+                                    H_sub_b = H_matrix.loc[valid_w_comps_b, valid_asvs_b].values
+                                    V_recon_b = np.dot(W_sub_b, H_sub_b)
+                                    
+                                    df_final_b = pd.DataFrame(V_recon_b, columns=valid_asvs_b)
+                                    df_final_b.insert(0, class_col_target, df_w[class_col_target].values)
+                                    
+                                    # 5. 決定檔名並寫入 ZIP
+                                    if "所有特徵" in strategy: strat_name_b = "All"
+                                    elif "專屬生物" in strategy: strat_name_b = "Exclusive"
+                                    elif "核心共用" in strategy: strat_name_b = "CoreShared"
+                                    else: strat_name_b = "Custom"
+                                    
+                                    comps_str_b = "_".join(sort_comps(final_selected_comps)) if len(final_selected_comps) <= 5 else f"{len(final_selected_comps)}Comps"
+                                    feature_count_b = len(valid_asvs_b)
+                                    
+                                    filename_b = f"Reconstructed_{comps_str_b}_Top{n_val}_{strat_name_b}_{feature_count_b}ASVs.csv"
+                                    
+                                    csv_str_b = df_final_b.to_csv(index=False).encode('utf-8-sig')
+                                    zip_file.writestr(filename_b, csv_str_b)
+                                    generated_files += 1
+
+                            batch_bar.progress(1.0, text="✅ 批量打包完成！")
+                            
+                            if generated_files > 0:
+                                st.success(f"🎉 成功生成並打包了 {generated_files} 份特徵矩陣！")
+                                st.download_button(
+                                    label="🎁 點此下載完整 ZIP 壓縮檔",
+                                    data=zip_buffer.getvalue(),
+                                    file_name=f"Batch_Reconstructed_Matrices_{strat_name_b}.zip",
+                                    mime="application/zip",
+                                    type="primary"
+                                )
+                            else:
+                                st.error("⚠️ 根據您設定的條件與策略，這些 N 值都沒有萃取出符合條件的特徵，因此沒有生成任何檔案。")
+                                
+                    except Exception as e:
+                        st.error(f"批量處理時發生錯誤：{str(e)}")
+
+            else:
+                st.warning("⚠️ 請從步驟 2 選擇至少一個成分以繼續。")
